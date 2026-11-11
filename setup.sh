@@ -48,7 +48,12 @@ SUBS=(libmspack glslang FFmpeg tomlplusplus simde xxHash spdlog fmt snappy utfcp
 git -C "$DEPS/rexglue" submodule update --init --depth 1 --jobs "$JOBS" -- "${SUBS[@]/#/thirdparty/}"
 # this port's changes to the SDK, on a clean checkout each time (patches/rexglue-*.patch, docs/PORTING.md)
 git -C "$DEPS/rexglue" checkout --quiet -- .
+git -C "$DEPS/rexglue" clean --quiet -fd -- include src cmake thirdparty/crypto thirdparty/renderdoc
 for p in "$ROOT"/patches/rexglue-*.patch; do [ -s "$p" ] && git -C "$DEPS/rexglue" apply "$p"; done
+# and to its FFmpeg submodule (its own repository): patches/ffmpeg-*.patch
+git -C "$DEPS/rexglue/thirdparty/FFmpeg" checkout --quiet -- .
+git -C "$DEPS/rexglue/thirdparty/FFmpeg" clean --quiet -fd
+for p in "$ROOT"/patches/ffmpeg-*.patch; do [ -s "$p" ] && git -C "$DEPS/rexglue/thirdparty/FFmpeg" apply "$p"; done
 
 # reUndr-ps5's pinned PS5 toolchain, built by its own scripts (the same pin and steps as reKing's setup.sh)
 REUNDR=${REUNDR:-$DEPS/reUndr-ps5}

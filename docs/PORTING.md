@@ -9,6 +9,13 @@ With the PS5 toolchain file, ReXGlue's CMake takes the Linux path (`REX_PLATFORM
 `REX_PLATFORM_PS5=1` for the code the port changes. Changes to the SDK go in `patches/rexglue-ps5.patch`, changes to
 the game's sources in `patches/goldeneye-ps5.patch`.
 
+## Status
+
+- Compiles: ReXGlue, FFmpeg and the game's own sources pass a syntax check against the PS5 SDK's headers with
+  `patches/rexglue-ps5.patch` and `patches/ffmpeg-ps5.patch` (sections 2, 3 and 6 below are done at the source
+  level). Next: a full compile on the build machine, then the link.
+- Not started: guest memory (1), the VideoOut surface and RADV loading (4), sound, input and the app shell (5).
+
 ## 1. Guest memory (the big one)
 
 `src/core/memory_posix.cpp` builds the 360's address space the Linux way: `shm_open` / `ftruncate` for physical

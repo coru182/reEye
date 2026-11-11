@@ -42,10 +42,13 @@ if has compile; then
     # the port's flags go in through CFLAGS / CXXFLAGS, which CMake adds to the toolchain file's own (its PS5 include
     # folders and TLS model); passing CMAKE_C_FLAGS instead would replace them and break every check (0.0.1's mistake)
     flags="-DREX_PLATFORM_PS5=1 -ffunction-sections -fdata-sections"
-    config="2|$flags|${SDL[*]}"
+    # C++: the SIE target turns exceptions and RTTI off by default, and ReXGlue uses both; std::jthread and
+    # std::stop_token are behind -fexperimental-library in the SDK's libc++ 18
+    cxxflags="$flags -fexceptions -fcxx-exceptions -frtti -fexperimental-library"
+    config="3|$flags|$cxxflags|${SDL[*]}"
     [ "$(cat "$B/.reeye-config" 2>/dev/null)" = "$config" ] || rm -rf "$B"
     mkdir -p "$B"
-    CFLAGS="$flags" CXXFLAGS="$flags" cmake -S "$GAME" -B "$B" -G Ninja \
+    CFLAGS="$flags" CXXFLAGS="$cxxflags" cmake -S "$GAME" -B "$B" -G Ninja \
         -DCMAKE_TOOLCHAIN_FILE="$REUNDR/ps5/cmake/ps5.cmake" \
         -DPS5_PAYLOAD_SDK="$SDK" -DCMAKE_C_COMPILER=/usr/lib/llvm-18/bin/clang \
         -DCMAKE_CXX_COMPILER=/usr/lib/llvm-18/bin/clang++ -DCMAKE_BUILD_TYPE=Release -DREXSDK_DIR="$DEPS/rexglue" \
@@ -53,12 +56,13 @@ if has compile; then
         -DREXGLUE_ENABLE_PERF_COUNTERS=OFF "${SDL[@]/#/-D}" > "$OUT/configure.log" 2>&1 ||
         { tail -30 "$OUT/configure.log"; echo "compile: CMake configure failed (see $OUT/configure.log)"; exit 1; }
     echo "$config" > "$B/.reeye-config"
-    # -k 0: keep going past failing sources; the PC executable's own link is not used (the PS5 link is below)
+    # only what the game needs (not the recompiler or the CLI); -k 0: keep going past failing sources. The PC
+    # executable's own link fails and is not used: the PS5 link is below.
     set +e
-    cmake --build "$B" -j "$JOBS" -- -k 0 > "$OUT/compile.log" 2>&1
+    cmake --build "$B" --target ge -j "$JOBS" -- -k 0 > "$OUT/compile.log" 2>&1
     set -e
-    grep -E '^FAILED: ' "$OUT/compile.log" | sed -E 's/^FAILED: //' | grep -v -E '/GoldenEye$|/ge$' | sort -u \
-        > "$OUT/compile-errors.txt" || true
+    grep -E '^FAILED: ' "$OUT/compile.log" | sed -E 's/^FAILED: //' | grep -v -E '(^|/)(GoldenEye|ge)$|\.so$' |
+        sort -u > "$OUT/compile-errors.txt" || true
     for f in "$ROOT"/ps5/*.c; do
         o=$OUT/host/$(basename "$f" .c).o
         [ "$o" -nt "$f" ] || "$SDK/bin/prospero-clang" -std=c11 -O2 -ffunction-sections -fdata-sections -fno-plt \

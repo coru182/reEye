@@ -1,0 +1,38 @@
+diff --git a/config.h b/config.h
+index b6a504a..054306c 100644
+--- a/config.h
++++ b/config.h
+@@ -10,6 +10,8 @@
+ #else
+ #include "config_macos_x86_64.h"
+ #endif
++#elif defined(__PROSPERO__)
++#include "config_ps5_x86_64.h"
+ #elif defined(__gnu_linux__)
+ #if defined(__aarch64__)
+ #include "config_linux_aarch64.h"
+diff --git a/config_ps5_x86_64.h b/config_ps5_x86_64.h
+new file mode 100644
+index 0000000..bebe39a
+--- /dev/null
++++ b/config_ps5_x86_64.h
+@@ -0,0 +1,19 @@
++/* reEye: the PS5 (FreeBSD-based, x86-64 Zen 2) build: the Linux x86-64 configuration without what FreeBSD and the
++ * PS5 SDK lack */
++#include "config_linux_x86_64.h"
++#undef HAVE_ASM_TYPES_H
++#define HAVE_ASM_TYPES_H 0
++#undef HAVE_LINUX_PERF_EVENT_H
++#define HAVE_LINUX_PERF_EVENT_H 0
++#undef HAVE_MALLOC_H
++#define HAVE_MALLOC_H 0
++#undef HAVE_SYS_SOUNDCARD_H
++#define HAVE_SYS_SOUNDCARD_H 0
++#undef HAVE_MEMALIGN
++#define HAVE_MEMALIGN 0
++#undef HAVE_SCHED_GETAFFINITY
++#define HAVE_SCHED_GETAFFINITY 0
++#undef HAVE_SYSCTL
++#define HAVE_SYSCTL 0
++#undef CONFIG_ICONV
++#define CONFIG_ICONV 0

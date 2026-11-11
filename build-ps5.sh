@@ -31,16 +31,28 @@ mkdir -p "$OUT/host"
 
 if has compile; then
     # the game and ReXGlue through their own CMake, with reUndr's PS5 toolchain file: Vulkan only (RADV, linked in
-    # whole later), no SDL, no Tracy, no tests. REX_PLATFORM_PS5 marks the code paths the port changes.
+    # whole later), no Tracy, no tests. REX_PLATFORM_PS5 marks the code paths the port changes.
     B=$OUT/cmake
-    cmake -S "$GAME" -B "$B" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$REUNDR/ps5/cmake/ps5.cmake" \
+    # SDL3 (ReXGlue's CMake always builds it) the way reUndr-ps5 builds it for the PS5: static, console only, no
+    # window systems, audio or joysticks (the PS5 host does sound and input); Vulkan on for the surface glue
+    SDL=(SDL_STATIC=ON SDL_SHARED=OFF SDL_UNIX_CONSOLE_BUILD=ON SDL_X11=OFF SDL_WAYLAND=OFF SDL_KMSDRM=OFF
+         SDL_OPENGL=OFF SDL_OPENGLES=OFF SDL_VULKAN=ON SDL_OFFSCREEN=ON SDL_HIDAPI=OFF SDL_JOYSTICK=OFF SDL_AUDIO=OFF
+         SDL_HAPTIC=OFF SDL_SENSOR=OFF SDL_OSS=OFF SDL_TEST_LIBRARY=OFF SDL_TESTS=OFF SDL_EXAMPLES=OFF
+         LIBC_HAS_WCSNLEN=OFF LIBC_HAS_WCSLCPY=OFF LIBC_HAS_WCSLCAT=OFF)
+    # the port's flags go in through CFLAGS / CXXFLAGS, which CMake adds to the toolchain file's own (its PS5 include
+    # folders and TLS model); passing CMAKE_C_FLAGS instead would replace them and break every check (0.0.1's mistake)
+    flags="-DREX_PLATFORM_PS5=1 -ffunction-sections -fdata-sections"
+    config="2|$flags|${SDL[*]}"
+    [ "$(cat "$B/.reeye-config" 2>/dev/null)" = "$config" ] || rm -rf "$B"
+    mkdir -p "$B"
+    CFLAGS="$flags" CXXFLAGS="$flags" cmake -S "$GAME" -B "$B" -G Ninja \
+        -DCMAKE_TOOLCHAIN_FILE="$REUNDR/ps5/cmake/ps5.cmake" \
         -DPS5_PAYLOAD_SDK="$SDK" -DCMAKE_C_COMPILER=/usr/lib/llvm-18/bin/clang \
         -DCMAKE_CXX_COMPILER=/usr/lib/llvm-18/bin/clang++ -DCMAKE_BUILD_TYPE=Release -DREXSDK_DIR="$DEPS/rexglue" \
         -DREXGLUE_PS5=ON -DREXGLUE_USE_VULKAN=ON -DREXGLUE_ENABLE_TRACY=OFF -DREXGLUE_BUILD_TESTS=OFF \
-        -DREXGLUE_ENABLE_PERF_COUNTERS=OFF \
-        -DCMAKE_C_FLAGS="-DREX_PLATFORM_PS5=1 -ffunction-sections -fdata-sections" \
-        -DCMAKE_CXX_FLAGS="-DREX_PLATFORM_PS5=1 -ffunction-sections -fdata-sections" > "$OUT/configure.log" 2>&1 ||
+        -DREXGLUE_ENABLE_PERF_COUNTERS=OFF "${SDL[@]/#/-D}" > "$OUT/configure.log" 2>&1 ||
         { tail -30 "$OUT/configure.log"; echo "compile: CMake configure failed (see $OUT/configure.log)"; exit 1; }
+    echo "$config" > "$B/.reeye-config"
     # -k 0: keep going past failing sources; the PC executable's own link is not used (the PS5 link is below)
     set +e
     cmake --build "$B" -j "$JOBS" -- -k 0 > "$OUT/compile.log" 2>&1

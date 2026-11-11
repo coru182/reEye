@@ -39,7 +39,7 @@ You need a Linux machine (Ubuntu 24.04; WSL 2 should do) with:
 
 ```sh
 sudo apt install git cmake ninja-build clang-18 lld-18 llvm-18 llvm-18-dev zlib1g-dev python3 python3-pip patch zip \
-    pkg-config libgtk-3-dev libx11-xcb-dev libc++-18-dev libc++abi-18-dev
+    pkg-config libgtk-3-dev libx11-xcb-dev clang-20
 ```
 
 and Docker, for reUndr-ps5's PS5 toolchain.

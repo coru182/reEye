@@ -75,17 +75,15 @@ fi
 # GTK 3 and X11 on Linux: pkg-config libgtk-3-dev libx11-xcb-dev)
 pkg-config --exists gtk+-3.0 x11-xcb || { echo "setup: sudo apt install pkg-config libgtk-3-dev libx11-xcb-dev"; exit 1; }
 T=$ROOT/work/rexglue
-# with LLVM's libc++: the SDK uses C++23's std::expected, which Ubuntu 24.04's libstdc++ 13 hides from clang 18
-[ -f /usr/lib/llvm-18/include/c++/v1/expected ] ||
-    { echo "setup: sudo apt install libc++-18-dev libc++abi-18-dev"; exit 1; }
+# with clang 20: the SDK uses C++23 (std::expected, std::jthread, clock_time_conversion). clang 18 with Ubuntu 24.04's
+# libstdc++ 13 hides std::expected, and libc++ 18 lacks the other two; clang 20 with libstdc++ 13 has all three.
+command -v clang++-20 >/dev/null || { echo "setup: sudo apt install clang-20"; exit 1; }
 if [ ! -x "$T/rexglue" ]; then
-    rm -rf "$T/build"  # a build from before libc++ (setup.sh 0.0.1) can't be reused
-    cmake -S "$DEPS/rexglue" -B "$T/build-libcxx" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-18 \
-        -DCMAKE_CXX_COMPILER=clang++-18 -DCMAKE_CXX_FLAGS=-stdlib=libc++ \
-        -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++ -lc++abi" -DCMAKE_SHARED_LINKER_FLAGS="-stdlib=libc++ -lc++abi" \
-        -DREXGLUE_ENABLE_TRACY=OFF -DREXGLUE_BUILD_TESTS=OFF > /dev/null
-    cmake --build "$T/build-libcxx" --target rexglue -j "$JOBS"
-    cli=$(find "$T/build-libcxx" "$DEPS/rexglue/out" -type f -name rexglue -perm -u+x 2>/dev/null | head -1)
+    rm -rf "$T/build" "$T/build-libcxx"  # builds from earlier setup.sh versions can't be reused
+    cmake -S "$DEPS/rexglue" -B "$T/build-clang20" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-20 \
+        -DCMAKE_CXX_COMPILER=clang++-20 -DREXGLUE_ENABLE_TRACY=OFF -DREXGLUE_BUILD_TESTS=OFF > /dev/null
+    cmake --build "$T/build-clang20" --target rexglue -j "$JOBS"
+    cli=$(find "$T/build-clang20" "$DEPS/rexglue/out" -type f -name rexglue -perm -u+x 2>/dev/null | head -1)
     [ -n "$cli" ] || { echo "setup: the rexglue CLI was not built"; exit 1; }
     cp "$cli" "$T/rexglue"
 fi

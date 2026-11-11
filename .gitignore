@@ -1,0 +1,11 @@
+# downloaded and built by setup.sh and build-ps5.sh
+/deps/
+/work/
+/build-ps5/
+# your own home screen art
+/art/
+# never in the repository: game files and anything made from them
+*.xex
+*.xbla
+*.zip
+generated/

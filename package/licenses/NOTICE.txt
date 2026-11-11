@@ -1,0 +1,21 @@
+reEye (PPSA99070): GoldenEye 007 (Xbox 360 / XBLA) statically recompiled for the PS5
+
+An unofficial fan project, not affiliated with or endorsed by Rare, Microsoft, Nintendo, Activision, Danjaq, EON
+Productions or Sony Interactive Entertainment. It contains none of the game's files.
+
+What is in the app, and under which terms
+
+- reEye's own code, the PS5 host (ps5/) and its changes to the SDK and the port: GPL-3.0 (reEye-GPL-3.0.txt). The
+  PS5 entry and the POSIX replacements come from reKing (GPL-3.0), which follows reUndr's PS5 host by bystritskiy
+  (MIT, reUndr-MIT.txt).
+- GoldenEye-Recomp by SunJaycy, the PC port's hooks, fixes and configuration (The Unlicense,
+  GoldenEye-Recomp-Unlicense.txt).
+- The ReXGlue SDK (its GoldenEye fork), the recompiler and the Xbox 360 runtime, derived from Xenia (BSD-3-Clause,
+  ReXGlue-BSD-3-Clause.txt), and the third-party code it builds in under their own licences.
+- Dear ImGui (MIT), toml++ (MIT), the Khronos Vulkan headers (Apache-2.0 / MIT), glslang (BSD / MIT / Apache-2.0,
+  glslang.txt).
+- RADV from Mesa (MIT and others, Mesa-license.rst), built with PS5_Vulkan's recipe, which with its native link
+  recipe and the PS5 Platform library from the PS5_PayloadSDK fork is GPL-3.0-or-later (PS5_Vulkan-LICENSE.txt,
+  PS5_PayloadSDK-LICENSE.txt). The combined executable is therefore subject to the GPL-3.0-or-later.
+
+The game, its assets and the code generated from it belong to their owners and are not covered by any licence here.

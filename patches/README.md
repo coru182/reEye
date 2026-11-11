@@ -25,6 +25,10 @@ builds for Linux. See `docs/PORTING.md`.
   (`instance_khr_display.inc`), a `Ps5DisplaySurface` (`ui/surface_ps5.h`) and the display plane surface in
   `ui/vulkan/vulkan_presenter.cpp`, as reKing does.
 - `core/filesystem_posix.cpp`: the app's folder is /data/reeye (no /proc on the PS5).
+- Guest memory (`core/memory_posix.cpp`, `system/xmemory.cpp`): the 4.5 GB "file mapping" is one PS5 direct-memory
+  object (`ps5platform/shm.h`), mapped at Xenia's views inside one reserved range; commit, decommit and release in
+  the views are protection changes on whole 16 KB pages. The 0xE0000000 heap's 4 KB offset is applied as on Windows
+  (`xmemory.h`, and the recompiler's `init_h.inja`, so the CLI is rebuilt when the patch changes).
 - `cmake/rexglue_helpers.cmake`: the game target takes `REXGLUE_PS5_HOST_SOURCES` (reEye's `ps5/app_ps5.cpp`) in
   place of the GTK entry point.
 

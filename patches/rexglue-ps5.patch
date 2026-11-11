@@ -122,6 +122,23 @@ index 0000000..9484741
 +
 +}  // namespace std::chrono
 +#endif
+diff --git a/include/rex/memory/utils.h b/include/rex/memory/utils.h
+index 8ccb52c..7bae23c 100644
+--- a/include/rex/memory/utils.h
++++ b/include/rex/memory/utils.h
+@@ -145,6 +145,12 @@ void AlignedFree(T* ptr) {
+ using FileMappingHandle = intptr_t;
+ constexpr FileMappingHandle kFileMappingHandleInvalid = -1;
+ 
++#if REX_PLATFORM_PS5
++// reEye: the reserved range the guest's views are mapped into on the PS5 (memory_posix.cpp)
++void* ReserveGuestArena(size_t length);
++void ReleaseGuestArena(void* base, size_t length);
++#endif
++
+ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, size_t length,
+                                           PageAccess access, bool commit);
+ void CloseFileMappingHandle(FileMappingHandle handle, const std::filesystem::path& path);
 diff --git a/include/rex/platform.h b/include/rex/platform.h
 index 57d8cf6..e639a8e 100644
 --- a/include/rex/platform.h
@@ -184,6 +201,20 @@ index 0000000..245410f
 +#define CLOCK_MONOTONIC_RAW CLOCK_MONOTONIC
 +
 +#endif  // REX_PLATFORM_PS5
+diff --git a/include/rex/system/xmemory.h b/include/rex/system/xmemory.h
+index 3c3969a..2e79d9f 100644
+--- a/include/rex/system/xmemory.h
++++ b/include/rex/system/xmemory.h
+@@ -32,7 +32,8 @@ namespace rex::memory::detail {
+ /// The backing file maps the 0xE0 heap at a 0x1000-byte offset, but MapViewOfFileEx
+ /// rounds down to 64KB boundaries. Linux mmap handles 4KB offsets natively.
+ constexpr u32 PhysicalHostOffset([[maybe_unused]] u32 guest_addr) noexcept {
+-#if REX_PLATFORM_WIN32
++#if REX_PLATFORM_WIN32 || REX_PLATFORM_PS5
++  // reEye: the PS5's 16 KB pages round the view down too
+   return (guest_addr >= 0xE0000000u) ? 0x1000u : 0u;
+ #else
+   return 0u;
 diff --git a/include/rex/ui/surface.h b/include/rex/ui/surface.h
 index 34e1d65..913cc25 100644
 --- a/include/rex/ui/surface.h
@@ -278,6 +309,19 @@ index e672629..f8213cc 100644
  #endif
      bool ext_1_1_KHR_get_physical_device_properties2 = false;  // #60
      bool ext_EXT_debug_utils = false;                          // #129
+diff --git a/resources/templates/codegen/init_h.inja b/resources/templates/codegen/init_h.inja
+index 8449a0b..00f4bbb 100644
+--- a/resources/templates/codegen/init_h.inja
++++ b/resources/templates/codegen/init_h.inja
+@@ -102,7 +102,7 @@ extern PPCFuncMapping PPCFuncMappings[];
+ // Memory Access
+ //=============================================================================
+ 
+-#if REX_PLATFORM_WIN32
++#if REX_PLATFORM_WIN32 || REX_PLATFORM_PS5  // reEye: the PS5's 16 KB pages round the 0xE0 view down too
+ #define REX_PHYS_HOST_OFFSET(addr) (((u32)(addr) >= 0xE0000000u) ? 0x1000u : 0u)
+ #else
+ #define REX_PHYS_HOST_OFFSET(addr) 0u
 diff --git a/src/core/exception_handler_posix.cpp b/src/core/exception_handler_posix.cpp
 index 8aced51..d56e6a4 100644
 --- a/src/core/exception_handler_posix.cpp
@@ -430,6 +474,217 @@ index 00648e4..c389c09 100644
    char buff[FILENAME_MAX] = "";
    readlink("/proc/self/exe", buff, FILENAME_MAX);
    std::string s(buff);
+diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
+index fce701e..ca73d08 100644
+--- a/src/core/memory_posix.cpp
++++ b/src/core/memory_posix.cpp
+@@ -26,6 +26,14 @@
+ #include <rex/platform.h>
+ #include <rex/string.h>
+ 
++#if REX_PLATFORM_PS5
++#include <algorithm>
++#include <mutex>
++#include <vector>
++
++#include <ps5platform/shm.h>
++#endif
++
+ #if REX_PLATFORM_ANDROID
+ #include <string.h>
+ 
+@@ -201,8 +209,65 @@ static PageAccess PermsToPageAccess(const char perms[5]) {
+ }  // namespace
+ #endif  // REX_PLATFORM_LINUX
+ 
++#if REX_PLATFORM_PS5
++// reEye: the guest's memory on the PS5. A title can't create POSIX shared memory of gigabytes (its views are charged
++// to the few hundred MB of flexible memory), so the "file mapping" is one direct-memory object (ps5platform/shm.h,
++// as reKing's and the platform's emulator arenas do), mapped into a reserved range at each of Xenia's views. Its
++// pages are always backed; commit, decommit and release inside the views are protection changes, as on Linux once
++// the views exist. Host pages are 16 KB: a protection change is widened to whole pages when it grants access and
++// narrowed to whole pages when it takes access away, so a neighbour guest page never loses access it had.
++namespace {
++std::mutex ps5_lock;
++std::vector<ps5_shm> ps5_objects;  // FileMappingHandle = index; destroyed entries have bytes == 0
++struct Ps5View {
++  uintptr_t begin, end;
++};
++std::vector<Ps5View> ps5_views;
++
++bool Ps5InView(const void* address, size_t length) {
++  const uintptr_t begin = reinterpret_cast<uintptr_t>(address), end = begin + length;
++  std::lock_guard<std::mutex> lock(ps5_lock);
++  for (const Ps5View& v : ps5_views) {
++    if (begin >= v.begin && end <= v.end) return true;
++  }
++  return false;
++}
++
++// whole host pages: outward when the change grants access, inward when it removes it
++bool Ps5Protect(void* address, size_t length, int prot) {
++  const uintptr_t page = uintptr_t(page_size());
++  uintptr_t begin = reinterpret_cast<uintptr_t>(address), end = begin + length;
++  if (prot == PROT_NONE || !(prot & PROT_WRITE)) {
++    begin = (begin + page - 1) & ~(page - 1);
++    end &= ~(page - 1);
++  } else {
++    begin &= ~(page - 1);
++    end = (end + page - 1) & ~(page - 1);
++  }
++  if (end <= begin) return true;
++  return mprotect(reinterpret_cast<void*>(begin), end - begin, prot) == 0;
++}
++}  // namespace
++
++// The range Xenia's views go into: reserved outside the GPU window, near the hint when it is free
++void* ReserveGuestArena(size_t length) {
++  void* base = nullptr;
++  if (ps5_vrange_reserve(length, reinterpret_cast<void*>(0x100000000ull), 0x10000, &base) != 0) return nullptr;
++  return base;
++}
++
++void ReleaseGuestArena(void* base, size_t length) { ps5_vrange_release(base, length); }
++#endif
++
+ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_type,
+                  PageAccess access) {
++#if REX_PLATFORM_PS5
++  if (base_address && Ps5InView(base_address, length)) {
++    // the views are backed throughout: a reserve keeps the range as it is, a commit sets its access
++    if (allocation_type == AllocationType::kReserve) return base_address;
++    return Ps5Protect(base_address, length, int(ToPosixProtectFlags(access))) ? base_address : nullptr;
++  }
++#endif
+   // Emulates Windows VirtualAlloc behavior:
+   // - Reserve: create PROT_NONE mapping to hold address space
+   // - Commit on existing reservation: mprotect to enable access (EEXIST path)
+@@ -257,6 +322,10 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
+ }
+ 
+ bool DeallocFixed(void* base_address, size_t length, DeallocationType deallocation_type) {
++#if REX_PLATFORM_PS5
++  // in a view, decommit and release take the access away (the view and its memory stay)
++  if (base_address && Ps5InView(base_address, length)) return Ps5Protect(base_address, length, PROT_NONE);
++#endif
+   switch (deallocation_type) {
+     case DeallocationType::kDecommit: {
+       // Decommit: remove access first, then release physical pages
+@@ -283,7 +352,12 @@ bool Protect(void* base_address, size_t length, PageAccess access, PageAccess* o
+     *out_old_access = PageAccess::kNoAccess;
+   }
+ 
+-#if REX_PLATFORM_LINUX
++#if REX_PLATFORM_PS5
++  // no /proc to read the old access from (callers on the PS5 get kNoAccess); 16 KB pages as above
++  if (base_address && Ps5InView(base_address, length)) {
++    return Ps5Protect(base_address, length, int(ToPosixProtectFlags(access)));
++  }
++#elif REX_PLATFORM_LINUX
+   // NOTE(tomc): we may want to look at doing this differently. it should work for now
+   //             but there is a TOCTOU window between reading and changing.
+   //             This really shouldn't be an issue since VirtualProtect on Windows isn't truly
+@@ -302,7 +376,7 @@ bool Protect(void* base_address, size_t length, PageAccess access, PageAccess* o
+ }
+ 
+ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
+-#if !REX_PLATFORM_LINUX
++#if !REX_PLATFORM_LINUX || REX_PLATFORM_PS5
+   access_out = PageAccess::kNoAccess;
+   length = 0;
+   return false;
+@@ -325,7 +399,24 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
+ 
+ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, size_t length,
+                                           PageAccess access, bool commit) {
+-#if REX_PLATFORM_ANDROID
++#if REX_PLATFORM_PS5
++  (void)path;
++  (void)access;
++  (void)commit;
++  ps5_shm shm{};
++  if (ps5_shm_create(length, &shm) != 0) return kFileMappingHandleInvalid;
++  // direct memory can come back holding what an earlier process left in it: clear it through a temporary view
++  void* view = nullptr;
++  if (ps5_shm_map(&shm, 0, shm.bytes, nullptr, PS5_SHM_READ | PS5_SHM_WRITE, 0, &view) != 0 || !view) {
++    ps5_shm_destroy(&shm);
++    return kFileMappingHandleInvalid;
++  }
++  std::memset(view, 0, shm.bytes);
++  ps5_shm_unmap(view, shm.bytes, 0);
++  std::lock_guard<std::mutex> lock(ps5_lock);
++  ps5_objects.push_back(shm);
++  return static_cast<FileMappingHandle>(ps5_objects.size() - 1);
++#elif REX_PLATFORM_ANDROID
+   // TODO(Triang3l): Check if memfd can be used instead on API 30+.
+   if (android_ASharedMemory_create_) {
+     int sharedmem_fd = android_ASharedMemory_create_(path.c_str(), length);
+@@ -382,6 +473,15 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, siz
+ }
+ 
+ void CloseFileMappingHandle(FileMappingHandle handle, const std::filesystem::path& path) {
++#if REX_PLATFORM_PS5
++  (void)path;
++  std::lock_guard<std::mutex> lock(ps5_lock);
++  if (handle >= 0 && size_t(handle) < ps5_objects.size() && ps5_objects[size_t(handle)].bytes) {
++    ps5_shm_destroy(&ps5_objects[size_t(handle)]);
++    ps5_objects[size_t(handle)].bytes = 0;
++  }
++  return;
++#endif
+   close(static_cast<int>(handle));
+ #if !REX_PLATFORM_ANDROID
+   auto full_path = MakeShmName(path);
+@@ -391,6 +491,30 @@ void CloseFileMappingHandle(FileMappingHandle handle, const std::filesystem::pat
+ 
+ void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, PageAccess access,
+                   size_t file_offset) {
++#if REX_PLATFORM_PS5
++  ps5_shm shm{};
++  {
++    std::lock_guard<std::mutex> lock(ps5_lock);
++    if (handle < 0 || size_t(handle) >= ps5_objects.size() || !ps5_objects[size_t(handle)].bytes) return nullptr;
++    shm = ps5_objects[size_t(handle)];
++  }
++  // views are mapped read-write and given their access afterwards (the platform refuses execute at map time)
++  void* view = nullptr;
++  if (ps5_shm_map(&shm, file_offset, length, base_address, PS5_SHM_READ | PS5_SHM_WRITE,
++                  base_address ? PS5_SHM_FIXED : 0u, &view) != 0 || !view) {
++    return nullptr;
++  }
++  if (base_address && view != base_address) {
++    ps5_shm_unmap(view, length, 0);
++    return nullptr;
++  }
++  if (access != PageAccess::kReadWrite) {
++    mprotect(view, length, int(ToPosixProtectFlags(access)));
++  }
++  std::lock_guard<std::mutex> lock(ps5_lock);
++  ps5_views.push_back({reinterpret_cast<uintptr_t>(view), reinterpret_cast<uintptr_t>(view) + length});
++  return view;
++#endif
+   // file_offset must be page-aligned
+   const size_t page = page_size();
+   if (file_offset % page != 0) {
+@@ -423,6 +547,18 @@ void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, P
+ }
+ 
+ bool UnmapFileView(FileMappingHandle handle, void* base_address, size_t length) {
++#if REX_PLATFORM_PS5
++  (void)handle;
++  {
++    std::lock_guard<std::mutex> lock(ps5_lock);
++    const uintptr_t begin = reinterpret_cast<uintptr_t>(base_address);
++    ps5_views.erase(std::remove_if(ps5_views.begin(), ps5_views.end(),
++                                   [begin](const Ps5View& v) { return v.begin == begin; }),
++                    ps5_views.end());
++  }
++  // the range stays reserved: the arena is released as a whole
++  return ps5_shm_unmap(base_address, length, PS5_SHM_KEEP_RESERVED) == 0;
++#endif
+   return munmap(base_address, length) == 0;
+ }
+ 
 diff --git a/src/core/threading_posix.cpp b/src/core/threading_posix.cpp
 index e10e30b..dd17f21 100644
 --- a/src/core/threading_posix.cpp
@@ -520,6 +775,38 @@ index 4c9d2e0..e9dbd87 100644
  add_library(rex::runtime ALIAS rexruntime)
  add_library(rex::system ALIAS rexruntime)
  add_library(rex::kernel ALIAS rexruntime)
+diff --git a/src/system/xmemory.cpp b/src/system/xmemory.cpp
+index ca7f4e8..01f4c27 100644
+--- a/src/system/xmemory.cpp
++++ b/src/system/xmemory.cpp
+@@ -145,6 +145,19 @@ bool Memory::Initialize() {
+   // Attempt to create our views. This may fail at the first address
+   // we pick, so try a few times.
+   mapping_base_ = 0;
++#if REX_PLATFORM_PS5
++  // reEye: on the PS5 the views go into one reserved range (4 GB of views and 512 MB of physical memory)
++  {
++    constexpr size_t kArenaSize = 0x120000000ull;
++    auto arena = static_cast<uint8_t*>(rex::memory::ReserveGuestArena(kArenaSize));
++    if (arena && !MapViews(arena)) {
++      mapping_base_ = arena;
++      REXSYS_INFO("Guest memory: views at {:p} (PS5 direct memory)", static_cast<void*>(arena));
++    } else if (arena) {
++      rex::memory::ReleaseGuestArena(arena, kArenaSize);
++    }
++  }
++#else
+   for (size_t n = 32; n < 64; n++) {
+     auto mapping_base = reinterpret_cast<uint8_t*>(1ull << n);
+     if (!MapViews(mapping_base)) {
+@@ -152,6 +165,7 @@ bool Memory::Initialize() {
+       break;
+     }
+   }
++#endif
+   if (!mapping_base_) {
+     REXSYS_ERROR("Unable to find a continuous block in the 64bit address space.");
+     assert_always();
 diff --git a/src/system/xsocket.cpp b/src/system/xsocket.cpp
 index 1e8374c..6892217 100644
 --- a/src/system/xsocket.cpp

@@ -17,7 +17,9 @@ the game's sources in `patches/goldeneye-ps5.patch`.
 - Everything compiles; the link needed `main` and three libc functions (`ps5/posix_ps5.c`).
 - App shell: `ps5/app_ps5.cpp` (entry point, UI loop, one full-screen window; game files in /data/reeye/game).
 - Vulkan: RADV linked in and the VideoOut surface (4) are in the SDK patch.
-- Not started: guest memory (1), sound and input (5).
+- Guest memory (1): direct memory through ps5platform's shm (first try, 0.0.1 boots to "Unable to reserve the 4gb
+  guest address space" without it).
+- Not started: sound and input (5).
 
 ## 1. Guest memory (the big one)
 

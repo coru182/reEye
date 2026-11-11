@@ -83,15 +83,20 @@ T=$ROOT/work/rexglue
 # with clang 20: the SDK uses C++23 (std::expected, std::jthread, clock_time_conversion). clang 18 with Ubuntu 24.04's
 # libstdc++ 13 hides std::expected, and libc++ 18 lacks the other two; clang 20 with libstdc++ 13 has all three.
 command -v clang++-20 >/dev/null || { echo "setup: sudo apt install clang-20"; exit 1; }
-if [ ! -x "$T/rexglue" ]; then
+# The CLI needs its shared libraries (librexruntime.so...), kept beside it in work/rexglue. A CLI whose libraries are
+# missing is rebuilt: 0.0.1's PS5 build wrote into the same out/linux-amd64 folder and replaced or removed them.
+cli_ok() { [ -x "$T/rexglue" ] && ! LD_LIBRARY_PATH="$T" ldd "$T/rexglue" 2>/dev/null | grep -q 'not found'; }
+if ! cli_ok; then
     rm -rf "$T/build" "$T/build-libcxx"  # builds from earlier setup.sh versions can't be reused
-    rm -rf "$DEPS/rexglue/out/linux-amd64"  # 0.0.1's PS5 build wrote its libraries there too
+    rm -rf "$DEPS/rexglue/out/linux-amd64"  # rebuilt from the objects already compiled, without the PS5 build's
     cmake -S "$DEPS/rexglue" -B "$T/build-clang20" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-20 \
         -DCMAKE_CXX_COMPILER=clang++-20 -DREXGLUE_ENABLE_TRACY=OFF -DREXGLUE_BUILD_TESTS=OFF > /dev/null
     cmake --build "$T/build-clang20" --target rexglue -j "$JOBS"
-    cli=$(find "$T/build-clang20" "$DEPS/rexglue/out" -type f -name rexglue -perm -u+x 2>/dev/null | head -1)
+    cli=$(find "$DEPS/rexglue/out/linux-amd64" "$T/build-clang20" -type f -name rexglue -perm -u+x 2>/dev/null | head -1)
     [ -n "$cli" ] || { echo "setup: the rexglue CLI was not built"; exit 1; }
     cp "$cli" "$T/rexglue"
+    find "$DEPS/rexglue/out/linux-amd64" -maxdepth 1 -name '*.so*' -exec cp -P {} "$T/" \;
+    cli_ok || { echo "setup: the rexglue CLI is missing libraries:"; LD_LIBRARY_PATH="$T" ldd "$T/rexglue" | grep 'not found'; exit 1; }
 fi
 
 # the game's tree: GoldenEye-Recomp's sources, with this port's changes, and your default.xex
@@ -102,6 +107,6 @@ cp -r "$DEPS/GoldenEye-Recomp/." "$G/"
 rm -rf "$G/.git"
 for p in "$ROOT"/patches/goldeneye-*.patch; do [ -s "$p" ] && patch -s -d "$G" -p1 < "$p"; done
 cp "$SRC/default.xex" "$G/assets/default.xex"
-(cd "$G" && "$T/rexglue" codegen ge_manifest.toml)
+(cd "$G" && LD_LIBRARY_PATH="$T" "$T/rexglue" codegen ge_manifest.toml)
 [ -d "$G/generated" ] || { echo "setup: the recompiler made no generated/ folder"; exit 1; }
 echo "setup: $(ls "$G"/generated/*.cpp | wc -l) generated sources; now ./build-ps5.sh"

@@ -23,6 +23,9 @@ TITLE=PPSA99070
 VERSION=0.0.1
 JOBS=${JOBS:-$(nproc)}
 export PATH=/usr/lib/llvm-18/bin:$PATH
+# the SDK's prospero-* wrappers pick the newest LLVM installed (clang 20 is there for the ReXGlue CLI): keep them on
+# LLVM 18, the toolchain everything here is built with
+export LLVM_CONFIG=/usr/bin/llvm-config-18
 STAGES=("$@"); [ ${#STAGES[@]} -gt 0 ] || STAGES=(compile link package)
 has() { local s; for s in "${STAGES[@]}"; do [ "$s" = "$1" ] && return 0; done; return 1; }
 [ -d "$GAME/generated" ] || { echo "build: run ./setup.sh /path/to/xbla-files first"; exit 1; }

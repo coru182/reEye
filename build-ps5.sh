@@ -108,7 +108,7 @@ if has link; then
         flags+=("$item")
     done
     # libc.a's raw-syscall readlink, pathconf and fork share an object the link needs: bound to ps5/posix_ps5.c's
-    for name in readlink pathconf fork; do flags+=("--defsym=$name=reeye_$name"); done
+    for name in readlink pathconf fork setsid vfork; do flags+=("--defsym=$name=reeye_$name"); done
     { printf '{local:\n_Zn*; _Zd*;\n'
       for item in "${flags[@]}"; do [[ $item == --defsym=* ]] && { n=${item#--defsym=}; printf '%s;\n' "${n%%=*}"; }; done
       printf '*;};\n'; } > "$work/exports.map"
@@ -128,6 +128,9 @@ if has link; then
         | sort | uniq -c > "$work/raw_syscalls.txt"
     if [ -s "$work/raw_syscalls.txt" ]; then echo "link: raw syscalls left in:"; cat "$work/raw_syscalls.txt"; exit 1; fi
     echo "link: no raw syscalls"
+    # for reading a crash: the PS5's crash dialog gives addresses; the app loads at 0x400000, so address - 0x400000
+    # is the offset to look up here
+    llvm-nm-18 -n -C "$work/llvm-pie.elf" > "$OUT/symbols-$VERSION.txt" 2>/dev/null || true
     echo "link: $(du -h "$work/llvm-pie.elf" | cut -f1) $work/llvm-pie.elf"
 fi
 

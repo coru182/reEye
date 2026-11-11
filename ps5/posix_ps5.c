@@ -85,3 +85,74 @@ int pthread_mutex_consistent(pthread_mutex_t *mutex) {
     (void)mutex;
     return 0;
 }
+
+/* Raw-syscall libc functions the link check found (SDL3's process code): bound to these with --defsym, as above */
+pid_t reeye_setsid(void) {
+    errno = EPERM;
+    return -1;
+}
+
+pid_t reeye_vfork(void) {
+    errno = ENOSYS;
+    return -1;
+}
+
+/* realpath: imported from the PS5's libc module but not provided there, so a call jumps nowhere (found in
+ * reColossus). libc++'s std::filesystem::canonical and weakly_canonical use it. No symbolic links here: the path is
+ * made absolute and its "." and ".." resolved, and it must exist, as POSIX asks. */
+#include <limits.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+
+char *realpath(const char *restrict path, char *restrict resolved) {
+    if (!path) {
+        errno = EINVAL;
+        return NULL;
+    }
+    if (!*path) {
+        errno = ENOENT;
+        return NULL;
+    }
+    char joined[PATH_MAX];
+    if (path[0] == '/') {
+        if (strlen(path) >= sizeof(joined)) { errno = ENAMETOOLONG; return NULL; }
+        strcpy(joined, path);
+    } else {
+        if (!getcwd(joined, sizeof(joined))) return NULL;
+        size_t n = strlen(joined);
+        if (n + 1 + strlen(path) >= sizeof(joined)) { errno = ENAMETOOLONG; return NULL; }
+        joined[n] = '/';
+        strcpy(joined + n + 1, path);
+    }
+    char out[PATH_MAX];
+    size_t len = 0;
+    const char *p = joined;
+    while (*p) {
+        while (*p == '/') p++;
+        if (!*p) break;
+        const char *start = p;
+        while (*p && *p != '/') p++;
+        size_t seg = (size_t)(p - start);
+        if (seg == 1 && start[0] == '.') continue;
+        if (seg == 2 && start[0] == '.' && start[1] == '.') {
+            while (len > 0 && out[len - 1] != '/') len--;
+            if (len > 0) len--;
+            continue;
+        }
+        if (len + 1 + seg >= sizeof(out)) { errno = ENAMETOOLONG; return NULL; }
+        out[len++] = '/';
+        memcpy(out + len, start, seg);
+        len += seg;
+    }
+    if (len == 0) out[len++] = '/';
+    out[len] = '\0';
+    struct stat st;
+    if (stat(out, &st) != 0) return NULL;
+    if (!resolved) {
+        resolved = malloc(len + 1);
+        if (!resolved) { errno = ENOMEM; return NULL; }
+    }
+    memcpy(resolved, out, len + 1);
+    return resolved;
+}

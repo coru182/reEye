@@ -139,11 +139,15 @@ if has package; then
     work=$OUT/link; native=$REUNDR/build/ps5-native-tool; app=$OUT/app/$TITLE
     [ -x "$native" ] || { echo "package: the native tool is not built ($native)"; exit 1; }
     rm -rf "$app"; mkdir -p "$app/sce_module"
-    llvm-objcopy-18 --strip-debug "$work/llvm-pie.elf" "$work/llvm-pie.stripped.elf"
+    echo "package: converting and signing (a minute or two for a program this size)"
+    llvm-objcopy-18 --strip-debug "$work/llvm-pie.elf" "$work/llvm-pie.stripped.elf" ||
+        { echo "package: llvm-objcopy-18 failed"; exit 1; }
     "$native" link --in "$work/llvm-pie.stripped.elf" --out "$work/eboot.elf" --stub-dir "$SDK/target/lib" \
         --stub "$work/stubs/libSceAgc.so" --stub "$work/stubs/libSceAgcDriver.so" --module-sdk 0x02000009 \
-        --companion-sdk 0x08050001 --file-name eboot.elf > "$work/convert.log" 2>&1
-    "$native" self --sign --in "$work/eboot.elf" --out "$app/eboot.bin" --magic 0x1D3D154F > "$work/sign.log" 2>&1
+        --companion-sdk 0x08050001 --file-name eboot.elf > "$work/convert.log" 2>&1 ||
+        { echo "package: the ELF conversion failed:"; tail -20 "$work/convert.log"; exit 1; }
+    "$native" self --sign --in "$work/eboot.elf" --out "$app/eboot.bin" --magic 0x1D3D154F > "$work/sign.log" 2>&1 ||
+        { echo "package: signing failed:"; tail -20 "$work/sign.log"; exit 1; }
     cp "$VK/runtime/libc.prx" "$app/sce_module/libc.prx"
     for f in "$app/eboot.bin" "$app/sce_module/libc.prx"; do
         "$native" self --inspect --file "$f" | grep -q "integrity: valid" || { echo "package: $f is not a valid fake SELF"; exit 1; }

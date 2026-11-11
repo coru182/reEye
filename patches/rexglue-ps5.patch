@@ -15,10 +15,10 @@ index a217a6e..ed9b6c0 100644
      elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64")
          set(REX_PLATFORM "linux-arm64")
 diff --git a/cmake/rexglue_helpers.cmake b/cmake/rexglue_helpers.cmake
-index 0471872..7bb4504 100644
+index 0471872..1c83760 100644
 --- a/cmake/rexglue_helpers.cmake
 +++ b/cmake/rexglue_helpers.cmake
-@@ -15,10 +15,12 @@
+@@ -15,12 +15,17 @@
  #==========================================================
  function(rexglue_apply_target_settings target_name)
      if(UNIX AND NOT APPLE)
@@ -29,9 +29,15 @@ index 0471872..7bb4504 100644
          target_link_libraries(${target_name} PRIVATE ${GTK3_LIBRARIES})
 +        endif()
          # Large executable support
-         if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+-        if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
++        # reEye: not on the PS5. The program is far under 2 GB, and the large model's .ldata / .lbss / .lrodata
++        # sections land where the PS5 packager puts the process parameters ("LLVM layout leaves no room").
++        if(REXGLUE_PS5)
++        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
              target_link_options(${target_name} PRIVATE -Wl,--no-relax)
-@@ -51,6 +53,9 @@ function(rexglue_configure_target target_name)
+             target_compile_options(${target_name} PRIVATE -mcmodel=large)
+         elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64")
+@@ -51,6 +56,9 @@ function(rexglue_configure_target target_name)
      if(WIN32)
          target_sources(${target_name} PRIVATE
              ${REXGLUE_SHARE_DIR}/windowed_app_main_win.cpp)

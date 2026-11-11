@@ -13,7 +13,13 @@
 #include <string_view>
 #include <vector>
 
+#include <fcntl.h>
+#include <pthread.h>
 #include <sys/stat.h>
+#include <unistd.h>
+#include <unwind.h>
+
+#include <ps5platform/heap.h>
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -156,6 +162,54 @@ std::unique_ptr<Window> Window::Create(WindowedAppContext& app_context, const st
 }
 
 }  // namespace rex::ui
+
+// reEye: abort() from anywhere in the program (the heap finding a damaged block, std::terminate, an assert) writes
+// /data/reeye/crash.txt first: the call stack as offsets in the linked program (look them up with llvm-symbolizer
+// against build-ps5/link/llvm-pie.elf), the thread, and the heap's state. The heap may be damaged here, so nothing
+// below allocates. The link wraps abort (build-ps5.sh).
+extern "C" [[noreturn]] void __real_abort(void);
+extern "C" int main(int argc, char** argv);
+
+namespace {
+struct Frames {
+  uintptr_t pc[48];
+  int count;
+};
+_Unwind_Reason_Code CollectFrame(struct _Unwind_Context* context, void* arg) {
+  auto* f = static_cast<Frames*>(arg);
+  if (f->count >= 48) return _URC_END_OF_STACK;
+  f->pc[f->count++] = uintptr_t(_Unwind_GetIP(context));
+  return _URC_NO_REASON;
+}
+}  // namespace
+
+extern "C" [[noreturn]] void __wrap_abort(void) {
+  static std::atomic<bool> once{false};
+  if (!once.exchange(true)) {
+    int fd = open("/data/reeye/crash.txt", O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (fd >= 0) {
+      char line[160];
+      // the program's load address, from where main is now and where the link put it (the symbol list's address)
+      int n = snprintf(line, sizeof line, "abort() called\nmain at %p\nthread %p\n", reinterpret_cast<void*>(&main),
+                       reinterpret_cast<void*>(pthread_self()));
+      write(fd, line, size_t(n));
+      Frames frames{};
+      _Unwind_Backtrace(CollectFrame, &frames);
+      for (int i = 0; i < frames.count; ++i) {
+        n = snprintf(line, sizeof line, "  #%d 0x%llx\n", i, static_cast<unsigned long long>(frames.pc[i]));
+        write(fd, line, size_t(n));
+      }
+      struct ps5_heap_stats heap{};
+      ps5_heap_stats(&heap);
+      n = snprintf(line, sizeof line, "heap: %zu MB mapped, peak %zu MB, %u segments, %u arenas, %llu libc fallbacks\n",
+                   heap.mapped_bytes >> 20, heap.peak_bytes >> 20, heap.segments, heap.arenas,
+                   static_cast<unsigned long long>(heap.libc_fallbacks));
+      write(fd, line, size_t(n));
+      close(fd);
+    }
+  }
+  __real_abort();
+}
 
 extern "C" int main(int argc, char** argv) {
   mkdir(kDataDir, 0777);

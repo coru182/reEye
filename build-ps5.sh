@@ -109,6 +109,8 @@ if has link; then
     done
     # libc.a's raw-syscall readlink, pathconf and fork share an object the link needs: bound to ps5/posix_ps5.c's
     for name in readlink pathconf fork setsid vfork; do flags+=("--defsym=$name=reeye_$name"); done
+    # abort() writes /data/reeye/crash.txt first (ps5/app_ps5.cpp)
+    flags+=("--wrap=abort")
     { printf '{local:\n_Zn*; _Zd*;\n'
       for item in "${flags[@]}"; do [[ $item == --defsym=* ]] && { n=${item#--defsym=}; printf '%s;\n' "${n%%=*}"; }; done
       printf '*;};\n'; } > "$work/exports.map"

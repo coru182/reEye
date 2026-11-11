@@ -27,7 +27,7 @@ if [ "$SRC" != --toolchain ]; then
 fi
 JOBS=${JOBS:-$(nproc)}
 export PATH=/usr/lib/llvm-18/bin:$PATH
-for tool in git cmake ninja clang-18 clang++-18 ld.lld llvm-objcopy-18 llvm-objdump-18 python3 patch zip; do
+for tool in git cmake ninja pkg-config clang-18 clang++-18 ld.lld llvm-objcopy-18 llvm-objdump-18 python3 patch zip; do
     command -v "$tool" >/dev/null || { echo "setup: $tool is missing (README.md, Building)"; exit 1; }
 done
 
@@ -71,7 +71,9 @@ if [ "$SRC" = --toolchain ]; then
     exit 0
 fi
 
-# the ReXGlue CLI for this machine: it runs the recompiler (only the CLI target, no game, no graphics)
+# the ReXGlue CLI for this machine: it runs the recompiler (only the CLI target is built; its CMake still looks for
+# GTK 3 and X11 on Linux: pkg-config libgtk-3-dev libx11-xcb-dev)
+pkg-config --exists gtk+-3.0 x11-xcb || { echo "setup: sudo apt install pkg-config libgtk-3-dev libx11-xcb-dev"; exit 1; }
 T=$ROOT/work/rexglue
 if [ ! -x "$T/rexglue" ]; then
     cmake -S "$DEPS/rexglue" -B "$T/build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-18 \

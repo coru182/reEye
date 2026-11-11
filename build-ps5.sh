@@ -36,7 +36,7 @@ if has compile; then
     cmake -S "$GAME" -B "$B" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$REUNDR/ps5/cmake/ps5.cmake" \
         -DPS5_PAYLOAD_SDK="$SDK" -DCMAKE_C_COMPILER=/usr/lib/llvm-18/bin/clang \
         -DCMAKE_CXX_COMPILER=/usr/lib/llvm-18/bin/clang++ -DCMAKE_BUILD_TYPE=Release -DREXSDK_DIR="$DEPS/rexglue" \
-        -DREXGLUE_USE_VULKAN=ON -DREXGLUE_ENABLE_TRACY=OFF -DREXGLUE_BUILD_TESTS=OFF \
+        -DREXGLUE_PS5=ON -DREXGLUE_USE_VULKAN=ON -DREXGLUE_ENABLE_TRACY=OFF -DREXGLUE_BUILD_TESTS=OFF \
         -DREXGLUE_ENABLE_PERF_COUNTERS=OFF \
         -DCMAKE_C_FLAGS="-DREX_PLATFORM_PS5=1 -ffunction-sections -fdata-sections" \
         -DCMAKE_CXX_FLAGS="-DREX_PLATFORM_PS5=1 -ffunction-sections -fdata-sections" > "$OUT/configure.log" 2>&1 ||

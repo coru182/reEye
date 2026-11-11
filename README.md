@@ -38,7 +38,8 @@ built for the PS5 by reUndr-ps5's toolchain, presented on VideoOut.
 You need a Linux machine (Ubuntu 24.04; WSL 2 should do) with:
 
 ```sh
-sudo apt install git cmake ninja-build clang-18 lld-18 llvm-18 llvm-18-dev zlib1g-dev python3 python3-pip patch zip
+sudo apt install git cmake ninja-build clang-18 lld-18 llvm-18 llvm-18-dev zlib1g-dev python3 python3-pip patch zip \
+    pkg-config libgtk-3-dev libx11-xcb-dev
 ```
 
 and Docker, for reUndr-ps5's PS5 toolchain.

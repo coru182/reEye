@@ -1,0 +1,21 @@
+--- a/src/ui/CMakeLists.txt
++++ b/src/ui/CMakeLists.txt
+@@ -61,6 +61,9 @@
+         window_win.cpp
+         windowed_app_context_win.cpp
+     )
++elseif(REXGLUE_PS5)
++    # PS5 (reEye): no desktop window; the PS5 host supplies the window and app context (VideoOut, ps5/)
++    set(REXUI_PLATFORM_SOURCES)
+ else()
+     set(REXUI_PLATFORM_SOURCES
+         surface_gnulinux.cpp
+@@ -136,6 +139,8 @@
+         dwmapi
+         Shcore
+     )
++elseif(REXGLUE_PS5)
++    # PS5 (reEye): no GTK or X11
+ else()
+     find_package(PkgConfig REQUIRED)
+     pkg_check_modules(GTK3 REQUIRED gtk+-3.0)

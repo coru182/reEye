@@ -15,7 +15,7 @@ index a217a6e..ed9b6c0 100644
      elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64")
          set(REX_PLATFORM "linux-arm64")
 diff --git a/cmake/rexglue_helpers.cmake b/cmake/rexglue_helpers.cmake
-index 0471872..d0fb2d1 100644
+index 0471872..7bb4504 100644
 --- a/cmake/rexglue_helpers.cmake
 +++ b/cmake/rexglue_helpers.cmake
 @@ -15,10 +15,12 @@
@@ -31,15 +31,16 @@ index 0471872..d0fb2d1 100644
          # Large executable support
          if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
              target_link_options(${target_name} PRIVATE -Wl,--no-relax)
-@@ -51,7 +53,7 @@ function(rexglue_configure_target target_name)
+@@ -51,6 +53,9 @@ function(rexglue_configure_target target_name)
      if(WIN32)
          target_sources(${target_name} PRIVATE
              ${REXGLUE_SHARE_DIR}/windowed_app_main_win.cpp)
--    else()
-+    elseif(NOT REXGLUE_PS5)  # reEye: on the PS5, ps5/ supplies the entry point (no desktop window)
++    elseif(REXGLUE_PS5)
++        # reEye: the PS5 host (reEye's ps5/) supplies the entry point, UI loop and window instead of GTK
++        target_sources(${target_name} PRIVATE ${REXGLUE_PS5_HOST_SOURCES})
+     else()
          target_sources(${target_name} PRIVATE
              ${REXGLUE_SHARE_DIR}/windowed_app_main_posix.cpp)
-     endif()
 diff --git a/include/rex/chrono/chrono.h b/include/rex/chrono/chrono.h
 index 8761cff..2248fe9 100644
 --- a/include/rex/chrono/chrono.h
@@ -165,6 +166,100 @@ index 0000000..245410f
 +#define CLOCK_MONOTONIC_RAW CLOCK_MONOTONIC
 +
 +#endif  // REX_PLATFORM_PS5
+diff --git a/include/rex/ui/surface.h b/include/rex/ui/surface.h
+index 34e1d65..913cc25 100644
+--- a/include/rex/ui/surface.h
++++ b/include/rex/ui/surface.h
+@@ -33,12 +33,15 @@ class Surface {
+     kTypeIndex_XcbWindow,
+     // Windows.
+     kTypeIndex_Win32Hwnd,
++    // PS5 (reEye): VideoOut's display, through VK_KHR_display.
++    kTypeIndex_Ps5Display,
+   };
+   using TypeFlags = uint32_t;
+   enum : TypeFlags {
+     kTypeFlag_AndroidNativeWindow = TypeFlags(1) << kTypeIndex_AndroidNativeWindow,
+     kTypeFlag_XcbWindow = TypeFlags(1) << kTypeIndex_XcbWindow,
+     kTypeFlag_Win32Hwnd = TypeFlags(1) << kTypeIndex_Win32Hwnd,
++    kTypeFlag_Ps5Display = TypeFlags(1) << kTypeIndex_Ps5Display,
+   };
+ 
+   Surface(const Surface& surface) = delete;
+diff --git a/include/rex/ui/surface_ps5.h b/include/rex/ui/surface_ps5.h
+new file mode 100644
+index 0000000..be1535a
+--- /dev/null
++++ b/include/rex/ui/surface_ps5.h
+@@ -0,0 +1,30 @@
++/**
++ * reEye: the PS5's one display (VideoOut). The Vulkan presenter makes it a VK_KHR_display plane surface on RADV;
++ * the size is the display mode the PS5 host chose.
++ */
++#pragma once
++
++#include <cstdint>
++
++#include <rex/ui/surface.h>
++
++namespace rex::ui {
++
++class Ps5DisplaySurface final : public Surface {
++ public:
++  Ps5DisplaySurface(uint32_t width, uint32_t height) : width_(width), height_(height) {}
++  TypeIndex GetType() const override { return kTypeIndex_Ps5Display; }
++
++ protected:
++  bool GetSizeImpl(uint32_t& width_out, uint32_t& height_out) const override {
++    width_out = width_;
++    height_out = height_;
++    return true;
++  }
++
++ private:
++  uint32_t width_;
++  uint32_t height_;
++};
++
++}  // namespace rex::ui
+diff --git a/include/rex/ui/vulkan/functions/instance_khr_display.inc b/include/rex/ui/vulkan/functions/instance_khr_display.inc
+new file mode 100644
+index 0000000..78aec28
+--- /dev/null
++++ b/include/rex/ui/vulkan/functions/instance_khr_display.inc
+@@ -0,0 +1,7 @@
++// VK_KHR_display functions used on the PS5 (reEye): VideoOut through RADV's display WSI.
++XE_UI_VULKAN_FUNCTION(vkGetPhysicalDeviceDisplayPropertiesKHR)
++XE_UI_VULKAN_FUNCTION(vkGetDisplayModePropertiesKHR)
++XE_UI_VULKAN_FUNCTION(vkGetPhysicalDeviceDisplayPlanePropertiesKHR)
++XE_UI_VULKAN_FUNCTION(vkGetDisplayPlaneSupportedDisplaysKHR)
++XE_UI_VULKAN_FUNCTION(vkGetDisplayPlaneCapabilitiesKHR)
++XE_UI_VULKAN_FUNCTION(vkCreateDisplayPlaneSurfaceKHR)
+diff --git a/include/rex/ui/vulkan/instance.h b/include/rex/ui/vulkan/instance.h
+index e672629..f8213cc 100644
+--- a/include/rex/ui/vulkan/instance.h
++++ b/include/rex/ui/vulkan/instance.h
+@@ -66,6 +66,10 @@ class VulkanInstance {
+     // VK_KHR_win32_surface (#10)
+ #ifdef VK_USE_PLATFORM_WIN32_KHR
+ #include <rex/ui/vulkan/functions/instance_khr_win32_surface.inc>
++#endif
++    // VK_KHR_display (#3), the PS5's VideoOut (reEye)
++#if REX_PLATFORM_PS5
++#include <rex/ui/vulkan/functions/instance_khr_display.inc>
+ #endif
+     // VK_KHR_get_physical_device_properties2 (#60, promoted to 1.1)
+ #include <rex/ui/vulkan/functions/instance_1_1_khr_get_physical_device_properties2.inc>
+@@ -91,6 +95,9 @@ class VulkanInstance {
+ #endif
+ #ifdef VK_USE_PLATFORM_WIN32_KHR
+     bool ext_KHR_win32_surface = false;  // #10
++#endif
++#if REX_PLATFORM_PS5
++    bool ext_KHR_display = false;  // #3 (reEye: the PS5's VideoOut)
+ #endif
+     bool ext_1_1_KHR_get_physical_device_properties2 = false;  // #60
+     bool ext_EXT_debug_utils = false;                          // #129
 diff --git a/src/core/exception_handler_posix.cpp b/src/core/exception_handler_posix.cpp
 index 8aced51..d56e6a4 100644
 --- a/src/core/exception_handler_posix.cpp
@@ -302,6 +397,21 @@ index 8aced51..d56e6a4 100644
                      &thread_context.xmm_registers[modified_register_index], sizeof(vec128_t));
        }
  #elif REX_ARCH_ARM64
+diff --git a/src/core/filesystem_posix.cpp b/src/core/filesystem_posix.cpp
+index 00648e4..c389c09 100644
+--- a/src/core/filesystem_posix.cpp
++++ b/src/core/filesystem_posix.cpp
+@@ -51,6 +51,10 @@ std::filesystem::path to_path(const std::u16string_view source) {
+ namespace filesystem {
+ 
+ std::filesystem::path GetExecutablePath() {
++#if REX_PLATFORM_PS5
++  // reEye: no /proc on the PS5; the app's folder for everything it keeps is /data/reeye
++  return "/data/reeye/reeye";
++#endif
+   char buff[FILENAME_MAX] = "";
+   readlink("/proc/self/exe", buff, FILENAME_MAX);
+   std::string s(buff);
 diff --git a/src/core/threading_posix.cpp b/src/core/threading_posix.cpp
 index e10e30b..dd17f21 100644
 --- a/src/core/threading_posix.cpp
@@ -429,6 +539,197 @@ index 18ad4ad..b5970d5 100644
  else()
      find_package(PkgConfig REQUIRED)
      pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
+diff --git a/src/ui/vulkan/vulkan_instance.cpp b/src/ui/vulkan/vulkan_instance.cpp
+index 0d2ded3..5513186 100644
+--- a/src/ui/vulkan/vulkan_instance.cpp
++++ b/src/ui/vulkan/vulkan_instance.cpp
+@@ -27,6 +27,11 @@ namespace rex {
+ namespace ui {
+ namespace vulkan {
+ 
++#if REX_PLATFORM_PS5
++// reEye: RADV's ICD entry point, linked into the PS5 app
++extern "C" PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance instance, const char* name);
++#endif
++
+ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+                                                        const bool try_enable_validation) {
+   std::unique_ptr<VulkanInstance> vulkan_instance(new VulkanInstance());
+@@ -40,6 +45,13 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+   Functions& ifn = vulkan_instance->functions_;
+ 
+   bool functions_loaded = true;
++#if REX_PLATFORM_PS5
++  // reEye: RADV is linked into the app and exports only its ICD entry point; Mesa dispatches physical device and
++  // device commands itself, so the pointers it returns serve every handle without a loader (as in reKing).
++  // vkDestroyInstance comes with the instance's functions once the instance exists.
++  ifn.vkGetInstanceProcAddr = vk_icdGetInstanceProcAddr;
++  ifn.vkDestroyInstance = nullptr;
++#else
+   if (!vulkan_instance->loader_.Load(platform::lib_names::kVulkanLoader)) {
+     REXLOG_ERROR("Failed to load {}", platform::lib_names::kVulkanLoader);
+     return nullptr;
+@@ -53,6 +65,7 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+     REXLOG_ERROR("Failed to get Vulkan loader function pointers");
+     return nullptr;
+   }
++#endif  // REX_PLATFORM_PS5
+ 
+   // Load global functions.
+ 
+@@ -116,6 +129,10 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+     // #10.
+     requested_extensions.emplace("VK_KHR_win32_surface",
+                                  &vulkan_instance->extensions_.ext_KHR_win32_surface);
++#endif
++#if REX_PLATFORM_PS5
++    // #3 (reEye): the PS5's VideoOut.
++    requested_extensions.emplace("VK_KHR_display", &vulkan_instance->extensions_.ext_KHR_display);
+ #endif
+   }
+ 
+@@ -336,6 +353,13 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+     return nullptr;
+   }
+ 
++#if REX_PLATFORM_PS5
++  // reEye: there is no loader to take vkDestroyInstance from (see above)
++  ifn.vkDestroyInstance =
++      PFN_vkDestroyInstance(ifn.vkGetInstanceProcAddr(vulkan_instance->instance_, "vkDestroyInstance"));
++  functions_loaded &= ifn.vkDestroyInstance != nullptr;
++#endif
++
+   // Load instance functions.
+ 
+ #define XE_UI_VULKAN_FUNCTION(name)                                                            \
+@@ -379,6 +403,11 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+   if (vulkan_instance->extensions_.ext_KHR_win32_surface) {
+ #include <rex/ui/vulkan/functions/instance_khr_win32_surface.inc>
+   }
++#endif
++#if REX_PLATFORM_PS5
++  if (vulkan_instance->extensions_.ext_KHR_display) {
++#include <rex/ui/vulkan/functions/instance_khr_display.inc>
++  }
+ #endif
+   if (vulkan_instance->extensions_.ext_KHR_surface) {
+ #include <rex/ui/vulkan/functions/instance_khr_surface.inc>
+diff --git a/src/ui/vulkan/vulkan_presenter.cpp b/src/ui/vulkan/vulkan_presenter.cpp
+index 30bafba..9dd06ad 100644
+--- a/src/ui/vulkan/vulkan_presenter.cpp
++++ b/src/ui/vulkan/vulkan_presenter.cpp
+@@ -42,6 +42,9 @@
+ #if REX_PLATFORM_WIN32
+ #include <rex/ui/surface_win.h>
+ #endif
++#if REX_PLATFORM_PS5
++#include <rex/ui/surface_ps5.h>
++#endif
+ 
+ REXCVAR_DEFINE_BOOL(present_render_pass_clear, true, "UI/Presenter",
+                     "Clear render pass during presentation");
+@@ -434,6 +437,11 @@ Surface::TypeFlags VulkanPresenter::GetSurfaceTypesSupportedByInstance(
+   if (instance_extensions.ext_KHR_win32_surface) {
+     type_flags |= Surface::kTypeFlag_Win32Hwnd;
+   }
++#endif
++#if REX_PLATFORM_PS5
++  if (instance_extensions.ext_KHR_display) {
++    type_flags |= Surface::kTypeFlag_Ps5Display;
++  }
+ #endif
+   return type_flags;
+ }
+@@ -823,6 +831,89 @@ VulkanPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_su
+         vulkan_surface_create_result = ifn.vkCreateWin32SurfaceKHR(
+             instance, &surface_create_info, nullptr, &paint_context_.vulkan_surface);
+       } break;
++#endif
++#if REX_PLATFORM_PS5
++      case Surface::kTypeIndex_Ps5Display: {
++        // reEye: VideoOut's display through VK_KHR_display, as reKing (and reUndr's SDL_ps5vulkan.c, MIT,
++        // bystritskiy) do: the display's mode closest to the surface's size, on the first plane that shows it.
++        vulkan_surface_create_result = VK_ERROR_INITIALIZATION_FAILED;
++        const VkPhysicalDevice gpu = vulkan_device_->physical_device();
++        uint32_t display_count = 0;
++        ifn.vkGetPhysicalDeviceDisplayPropertiesKHR(gpu, &display_count, nullptr);
++        std::vector<VkDisplayPropertiesKHR> displays(display_count);
++        if (display_count) {
++          ifn.vkGetPhysicalDeviceDisplayPropertiesKHR(gpu, &display_count, displays.data());
++        }
++        if (!display_count) {
++          REXLOG_ERROR("VulkanPresenter: VideoOut has no display");
++          break;
++        }
++        const VkDisplayKHR display = displays[0].display;
++        uint32_t mode_count = 0;
++        ifn.vkGetDisplayModePropertiesKHR(gpu, display, &mode_count, nullptr);
++        std::vector<VkDisplayModePropertiesKHR> modes(mode_count);
++        if (mode_count) {
++          ifn.vkGetDisplayModePropertiesKHR(gpu, display, &mode_count, modes.data());
++        }
++        if (!mode_count) {
++          REXLOG_ERROR("VulkanPresenter: VideoOut has no display modes");
++          break;
++        }
++        size_t best_mode = 0;
++        uint64_t best_distance = UINT64_MAX;
++        for (size_t i = 0; i < modes.size(); ++i) {
++          const VkExtent2D& extent = modes[i].parameters.visibleRegion;
++          const int64_t dw = int64_t(extent.width) - int64_t(new_surface_width);
++          const int64_t dh = int64_t(extent.height) - int64_t(new_surface_height);
++          const uint64_t distance = uint64_t(dw * dw + dh * dh);
++          if (distance < best_distance) {
++            best_distance = distance;
++            best_mode = i;
++          }
++        }
++        const VkDisplayModePropertiesKHR& mode = modes[best_mode];
++        uint32_t plane_count = 0;
++        ifn.vkGetPhysicalDeviceDisplayPlanePropertiesKHR(gpu, &plane_count, nullptr);
++        int plane = -1;
++        for (uint32_t i = 0; i < plane_count && plane < 0; ++i) {
++          uint32_t supported_count = 0;
++          if (ifn.vkGetDisplayPlaneSupportedDisplaysKHR(gpu, i, &supported_count, nullptr) != VK_SUCCESS ||
++              !supported_count) {
++            continue;
++          }
++          std::vector<VkDisplayKHR> supported(supported_count);
++          ifn.vkGetDisplayPlaneSupportedDisplaysKHR(gpu, i, &supported_count, supported.data());
++          for (VkDisplayKHR d : supported) {
++            if (d == display) {
++              plane = int(i);
++              break;
++            }
++          }
++        }
++        if (plane < 0) {
++          REXLOG_ERROR("VulkanPresenter: no plane shows VideoOut's display");
++          break;
++        }
++        VkDisplayPlaneCapabilitiesKHR plane_caps = {};
++        ifn.vkGetDisplayPlaneCapabilitiesKHR(gpu, mode.displayMode, uint32_t(plane), &plane_caps);
++        VkDisplaySurfaceCreateInfoKHR surface_create_info = {};
++        surface_create_info.sType = VK_STRUCTURE_TYPE_DISPLAY_SURFACE_CREATE_INFO_KHR;
++        surface_create_info.displayMode = mode.displayMode;
++        surface_create_info.planeIndex = uint32_t(plane);
++        surface_create_info.planeStackIndex = 0;
++        surface_create_info.transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
++        surface_create_info.globalAlpha = 1.0f;
++        surface_create_info.alphaMode =
++            (plane_caps.supportedAlpha & VK_DISPLAY_PLANE_ALPHA_OPAQUE_BIT_KHR)
++                ? VK_DISPLAY_PLANE_ALPHA_OPAQUE_BIT_KHR
++                : VK_DISPLAY_PLANE_ALPHA_GLOBAL_BIT_KHR;
++        surface_create_info.imageExtent = mode.parameters.visibleRegion;
++        vulkan_surface_create_result = ifn.vkCreateDisplayPlaneSurfaceKHR(
++            instance, &surface_create_info, nullptr, &paint_context_.vulkan_surface);
++        REXLOG_INFO("VulkanPresenter: VideoOut {}x{} at {}.{:03} Hz, plane {}",
++                    surface_create_info.imageExtent.width, surface_create_info.imageExtent.height,
++                    mode.parameters.refreshRate / 1000, mode.parameters.refreshRate % 1000, plane);
++      } break;
+ #endif
+       default:
+         assert_unhandled_case(surface_type);
 diff --git a/thirdparty/crypto/sha256.cpp b/thirdparty/crypto/sha256.cpp
 index f63fb2a..9ad8ae1 100644
 --- a/thirdparty/crypto/sha256.cpp

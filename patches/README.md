@@ -21,6 +21,12 @@ builds for Linux. See `docs/PORTING.md`.
 - `system/CMakeLists.txt`, `CMakeLists.txt`: rexruntime is a static library on the PS5, and the PS5 build's
   libraries go to `out/ps5-amd64` (apart from the Linux build of the ReXGlue CLI).
 - `thirdparty/renderdoc`, `thirdparty/crypto`: their OS checks and `<sys/endian.h>`.
+- Vulkan on VideoOut: RADV linked in (`vk_icdGetInstanceProcAddr` instead of a loader), `VK_KHR_display`
+  (`instance_khr_display.inc`), a `Ps5DisplaySurface` (`ui/surface_ps5.h`) and the display plane surface in
+  `ui/vulkan/vulkan_presenter.cpp`, as reKing does.
+- `core/filesystem_posix.cpp`: the app's folder is /data/reeye (no /proc on the PS5).
+- `cmake/rexglue_helpers.cmake`: the game target takes `REXGLUE_PS5_HOST_SOURCES` (reEye's `ps5/app_ps5.cpp`) in
+  place of the GTK entry point.
 
 ## ffmpeg-ps5.patch
 

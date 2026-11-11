@@ -14,7 +14,10 @@ the game's sources in `patches/goldeneye-ps5.patch`.
 - Compiles: ReXGlue, FFmpeg and the game's own sources pass a syntax check against the PS5 SDK's headers with
   `patches/rexglue-ps5.patch` and `patches/ffmpeg-ps5.patch` (sections 2, 3 and 6 below are done at the source
   level). Next: a full compile on the build machine, then the link.
-- Not started: guest memory (1), the VideoOut surface and RADV loading (4), sound, input and the app shell (5).
+- Everything compiles; the link needed `main` and three libc functions (`ps5/posix_ps5.c`).
+- App shell: `ps5/app_ps5.cpp` (entry point, UI loop, one full-screen window; game files in /data/reeye/game).
+- Vulkan: RADV linked in and the VideoOut surface (4) are in the SDK patch.
+- Not started: guest memory (1), sound and input (5).
 
 ## 1. Guest memory (the big one)
 

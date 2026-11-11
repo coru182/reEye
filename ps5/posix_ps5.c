@@ -63,3 +63,25 @@ pid_t reeye_fork(void) {
     errno = ENOSYS;
     return -1;
 }
+
+/* C library functions the PS5's libc lacks, which ReXGlue's dependencies call (found by the first link) */
+#include <pthread.h>
+#include <stdio.h>
+
+/* spdlog's file sink: a plain fwrite (the stream's lock costs nothing that matters here) */
+size_t fwrite_unlocked(const void *restrict ptr, size_t size, size_t count, FILE *restrict stream) {
+    return fwrite(ptr, size, count, stream);
+}
+
+/* ReXGlue's guest mutexes ask for robust mutexes, which only matter when another process dies holding one: a PS5
+ * app is one process, so plain mutexes do */
+int pthread_mutexattr_setrobust(pthread_mutexattr_t *attr, int robustness) {
+    (void)attr;
+    (void)robustness;
+    return 0;
+}
+
+int pthread_mutex_consistent(pthread_mutex_t *mutex) {
+    (void)mutex;
+    return 0;
+}

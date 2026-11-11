@@ -49,6 +49,7 @@ if has compile; then
     # std::stop_token are behind -fexperimental-library in the SDK's libc++ 18
     cxxflags="$flags -fexceptions -fcxx-exceptions -frtti -fexperimental-library"
     config="4|$flags|$cxxflags|${SDL[*]}"
+    # a change of compiler flags rebuilds everything; other options (the PS5 host's sources) only reconfigure
     [ "$(cat "$B/.reeye-config" 2>/dev/null)" = "$config" ] || rm -rf "$B"
     mkdir -p "$B"
     CFLAGS="$flags" CXXFLAGS="$cxxflags" cmake -S "$GAME" -B "$B" -G Ninja \
@@ -56,7 +57,8 @@ if has compile; then
         -DPS5_PAYLOAD_SDK="$SDK" -DCMAKE_C_COMPILER=/usr/lib/llvm-18/bin/clang \
         -DCMAKE_CXX_COMPILER=/usr/lib/llvm-18/bin/clang++ -DCMAKE_BUILD_TYPE=Release -DREXSDK_DIR="$DEPS/rexglue" \
         -DREXGLUE_PS5=ON -DREXGLUE_USE_VULKAN=ON -DREXGLUE_ENABLE_TRACY=OFF -DREXGLUE_BUILD_TESTS=OFF \
-        -DREXGLUE_ENABLE_PERF_COUNTERS=OFF "${SDL[@]/#/-D}" > "$OUT/configure.log" 2>&1 ||
+        -DREXGLUE_ENABLE_PERF_COUNTERS=OFF -DREXGLUE_PS5_HOST_SOURCES="$ROOT/ps5/app_ps5.cpp" \
+        "${SDL[@]/#/-D}" > "$OUT/configure.log" 2>&1 ||
         { tail -30 "$OUT/configure.log"; echo "compile: CMake configure failed (see $OUT/configure.log)"; exit 1; }
     echo "$config" > "$B/.reeye-config"
     # only what the game needs (not the recompiler or the CLI); -k 0: keep going past failing sources. The PC

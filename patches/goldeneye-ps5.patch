@@ -1,0 +1,81 @@
+--- a/src/ge_hooks.cpp
++++ b/src/ge_hooks.cpp
+@@ -25,6 +25,7 @@
+ #include <rex/system/xthread.h>
+ #include <rex/system/kernel_state.h>
+ #include <cstdio>
++#ifdef _WIN32
+ #ifndef WIN32_LEAN_AND_MEAN
+ #define WIN32_LEAN_AND_MEAN
+ #endif
+@@ -33,6 +34,26 @@
+ #endif
+ #include <windows.h>
+ #include <shellapi.h>  // ShellExecuteW (WIN32_LEAN_AND_MEAN excludes it)
++#else
++// reEye: no Windows on the PS5. No keyboard is read yet (keys read as up); the PS5 host's input comes later.
++#include <atomic>
++#include <cstring>
++#include <thread>
++static inline short GetAsyncKeyState(int) { return 0; }
++// The watchdog's guest stack walk asks Windows whether the stack page is readable; on the PS5 it reports nothing
++// (the walk is skipped: it is a diagnostic only)
++struct MEMORY_BASIC_INFORMATION {
++  void* BaseAddress;
++  size_t RegionSize;
++  uint32_t State;
++  uint32_t Protect;
++};
++enum : uint32_t {
++  MEM_COMMIT = 0x1000, PAGE_READONLY = 0x02, PAGE_READWRITE = 0x04, PAGE_WRITECOPY = 0x08,
++  PAGE_EXECUTE_READ = 0x20, PAGE_EXECUTE_READWRITE = 0x40
++};
++static inline size_t VirtualQuery(const void*, MEMORY_BASIC_INFORMATION*, size_t) { return 0; }
++#endif
+ #include <string>
+ 
+ namespace ge {
+@@ -42,6 +63,10 @@
+ // the current process down. Launching a second instance of a running exe is fine
+ // on Windows -- the image file is opened share-read.
+ void LaunchSelfDetached() {
++#ifndef _WIN32
++  // reEye: a PS5 app can't relaunch itself; the new settings apply at the next start
++  return;
++#else
+   wchar_t exe_path[MAX_PATH];
+   DWORD n = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
+   if (n == 0 || n >= MAX_PATH) {
+@@ -53,6 +78,7 @@
+   std::wstring workdir = (slash == std::wstring::npos) ? std::wstring() : full.substr(0, slash);
+   ShellExecuteW(nullptr, L"open", exe_path, nullptr,
+                 workdir.empty() ? nullptr : workdir.c_str(), SW_SHOWNORMAL);
++#endif
+ }
+ }  // namespace ge
+ 
+@@ -711,6 +737,7 @@
+ // act on the game/menu -- the menu only listens for the capture.
+ std::atomic<bool> g_rebind_capturing{false};
+ 
++#ifdef _WIN32
+ // Cursor-capture state (touched from the mouse thread + SetMouselookSuppressed).
+ HWND g_game_hwnd = nullptr;
+ HCURSOR g_arrow_cursor = nullptr;
+@@ -851,6 +878,16 @@
+   }
+ }
+ 
++#else
++// reEye: no desktop window or cursor on the PS5: the game always has focus, and there is no mouse look yet (a USB
++// mouse through the PS5 host comes later)
++bool ge_mouselook_on() { return REXCVAR_GET(ge_mouselook_enable); }
++bool ge_game_has_focus() { return true; }
++bool ge_mouse_active() { return false; }
++void ge_update_mouse_capture() {}
++void ge_start_mouse_once() {}
++#endif
++
+ int ge_take_mouse_dx() { return g_mouse_dx.exchange(0, std::memory_order_relaxed); }
+ int ge_take_mouse_dy() { return g_mouse_dy.exchange(0, std::memory_order_relaxed); }
+ }  // namespace

@@ -18,9 +18,17 @@ builds for Linux. See `docs/PORTING.md`.
 - `core/threading_posix.cpp`: FreeBSD thread names, ids and CPU sets; `pthread_kill` for the wakeup signal.
 - `system/xsocket.cpp`: FreeBSD defines `IPPROTO_UDP` as a macro.
 - `ui/CMakeLists.txt`, `cmake/rexglue_helpers.cmake`: no GTK, X11 or desktop entry point on the PS5.
+- `system/CMakeLists.txt`, `CMakeLists.txt`: rexruntime is a static library on the PS5, and the PS5 build's
+  libraries go to `out/ps5-amd64` (apart from the Linux build of the ReXGlue CLI).
 - `thirdparty/renderdoc`, `thirdparty/crypto`: their OS checks and `<sys/endian.h>`.
 
 ## ffmpeg-ps5.patch
 
 - `config_ps5_x86_64.h`: FFmpeg's Linux x86-64 configuration without what FreeBSD lacks (`malloc.h`, `memalign`,
   Linux headers).
+
+## goldeneye-ps5.patch
+
+- `src/ge_hooks.cpp`: GoldenEye-Recomp's Windows-only parts (relaunching itself, the raw-mouse window and cursor
+  capture, `GetAsyncKeyState`, the watchdog's `VirtualQuery`) are left out on the PS5: no relaunch, no mouse look and
+  no keyboard yet, and the diagnostic stack walk is skipped.

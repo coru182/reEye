@@ -45,7 +45,7 @@ if has compile; then
     # C++: the SIE target turns exceptions and RTTI off by default, and ReXGlue uses both; std::jthread and
     # std::stop_token are behind -fexperimental-library in the SDK's libc++ 18
     cxxflags="$flags -fexceptions -fcxx-exceptions -frtti -fexperimental-library"
-    config="3|$flags|$cxxflags|${SDL[*]}"
+    config="4|$flags|$cxxflags|${SDL[*]}"
     [ "$(cat "$B/.reeye-config" 2>/dev/null)" = "$config" ] || rm -rf "$B"
     mkdir -p "$B"
     CFLAGS="$flags" CXXFLAGS="$cxxflags" cmake -S "$GAME" -B "$B" -G Ninja \
@@ -109,7 +109,7 @@ if has link; then
       printf '*;};\n'; } > "$work/exports.map"
     # the game's objects and every static library CMake built (ReXGlue's modules and its third-party code)
     mapfile -t game < <(find "$B/CMakeFiles" -path '*/ge.dir/*' -name '*.o')
-    mapfile -t libs < <(find "$B" -name '*.a')
+    mapfile -t libs < <(find "$B" "$DEPS/rexglue/out/ps5-amd64" -name '*.a')
     stubs=(); for f in "$SDK"/target/lib/*.so; do case "$f" in *libScePosixForWebKit.so|*libSceGLSlimVSH.so|*libc_stub_weak.so) ;; *) stubs+=("$f") ;; esac; done
     "$SDK/bin/prospero-lld" "${radv_linker_script[@]}" "${flags[@]}" --version-script "$work/exports.map" \
         --exclude-libs=ALL --no-dynamic-linker --gc-sections -e _start -o "$work/llvm-pie.elf" \

@@ -85,6 +85,7 @@ T=$ROOT/work/rexglue
 command -v clang++-20 >/dev/null || { echo "setup: sudo apt install clang-20"; exit 1; }
 if [ ! -x "$T/rexglue" ]; then
     rm -rf "$T/build" "$T/build-libcxx"  # builds from earlier setup.sh versions can't be reused
+    rm -rf "$DEPS/rexglue/out/linux-amd64"  # 0.0.1's PS5 build wrote its libraries there too
     cmake -S "$DEPS/rexglue" -B "$T/build-clang20" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-20 \
         -DCMAKE_CXX_COMPILER=clang++-20 -DREXGLUE_ENABLE_TRACY=OFF -DREXGLUE_BUILD_TESTS=OFF > /dev/null
     cmake --build "$T/build-clang20" --target rexglue -j "$JOBS"

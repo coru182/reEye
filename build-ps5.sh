@@ -128,6 +128,10 @@ if has link; then
         | sort | uniq -c > "$work/raw_syscalls.txt"
     if [ -s "$work/raw_syscalls.txt" ]; then echo "link: raw syscalls left in:"; cat "$work/raw_syscalls.txt"; exit 1; fi
     echo "link: no raw syscalls"
+    # the PS5 packager needs room after the RELRO region: the large code model's sections take it
+    large=$(llvm-readelf-18 -S -W "$work/llvm-pie.elf" | grep -c -E ' \.l(text|rodata|data|bss)' || true)
+    [ "$large" = 0 ] || { echo "link: $large large-code-model sections (.ltext, .lrodata...) left: something still"
+                          echo "      builds with -mcmodel=large"; exit 1; }
     # for reading a crash: the PS5's crash dialog gives addresses; the app loads at 0x400000, so address - 0x400000
     # is the offset to look up here
     llvm-nm-18 -n -C "$work/llvm-pie.elf" > "$OUT/symbols-$VERSION.txt" 2>/dev/null || true
@@ -145,7 +149,9 @@ if has package; then
     "$native" link --in "$work/llvm-pie.stripped.elf" --out "$work/eboot.elf" --stub-dir "$SDK/target/lib" \
         --stub "$work/stubs/libSceAgc.so" --stub "$work/stubs/libSceAgcDriver.so" --module-sdk 0x02000009 \
         --companion-sdk 0x08050001 --file-name eboot.elf > "$work/convert.log" 2>&1 ||
-        { echo "package: the ELF conversion failed:"; tail -20 "$work/convert.log"; exit 1; }
+        { echo "package: the ELF conversion failed:"; tail -20 "$work/convert.log"
+          llvm-readelf-18 -l -W "$work/llvm-pie.stripped.elf" | sed -n '/Program Headers/,/Section to Segment/p' \
+              > "$work/segments.txt"; echo "package: the program's segments are in $work/segments.txt"; exit 1; }
     "$native" self --sign --in "$work/eboot.elf" --out "$app/eboot.bin" --magic 0x1D3D154F > "$work/sign.log" 2>&1 ||
         { echo "package: signing failed:"; tail -20 "$work/sign.log"; exit 1; }
     cp "$VK/runtime/libc.prx" "$app/sce_module/libc.prx"

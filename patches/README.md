@@ -25,6 +25,9 @@ builds for Linux. See `docs/PORTING.md`.
   (`instance_khr_display.inc`), a `Ps5DisplaySurface` (`ui/surface_ps5.h`) and the display plane surface in
   `ui/vulkan/vulkan_presenter.cpp`, as reKing does.
 - `core/filesystem_posix.cpp`: the app's folder is /data/reeye (no /proc on the PS5).
+- Sound: on the PS5 the SDL audio driver plays through `sceAudioOut` (48 kHz 16-bit stereo, one 256-sample frame a
+  call) instead of SDL's device, which the PS5's SDL lacks (`audio/sdl/sdl_audio_driver.cpp`).
+- Input: the default input system takes reEye's `ps5/input_ps5.cpp` (the DualSense through libScePad) on the PS5.
 - Guest memory (`core/memory_posix.cpp`, `system/xmemory.cpp`): the 4.5 GB "file mapping" is one PS5 direct-memory
   object (`ps5platform/shm.h`), mapped at Xenia's views inside one reserved range; commit, decommit and release in
   the views are protection changes on whole 16 KB pages. The 0xE0000000 heap's 4 KB offset is applied as on Windows

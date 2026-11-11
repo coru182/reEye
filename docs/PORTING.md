@@ -19,7 +19,8 @@ the game's sources in `patches/goldeneye-ps5.patch`.
 - Vulkan: RADV linked in and the VideoOut surface (4) are in the SDK patch.
 - Guest memory (1): direct memory through ps5platform's shm (first try, 0.0.1 boots to "Unable to reserve the 4gb
   guest address space" without it).
-- Not started: sound and input (5).
+- Guest memory works on the console (0.0.1: the game loads its files, then the screen stays black).
+- Sound (sceAudioOut in the SDL driver) and input (libScePad, controller 1): first try.
 
 ## 1. Guest memory (the big one)
 

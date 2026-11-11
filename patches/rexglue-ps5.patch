@@ -59,6 +59,41 @@ index 0471872..1c83760 100644
      else()
          target_sources(${target_name} PRIVATE
              ${REXGLUE_SHARE_DIR}/windowed_app_main_posix.cpp)
+diff --git a/include/rex/audio/sdl/sdl_audio_driver.h b/include/rex/audio/sdl/sdl_audio_driver.h
+index f8949ca..39400fc 100644
+--- a/include/rex/audio/sdl/sdl_audio_driver.h
++++ b/include/rex/audio/sdl/sdl_audio_driver.h
+@@ -12,9 +12,15 @@
+ #pragma once
+ 
+ #include <mutex>
++#include <atomic>
+ #include <queue>
+ #include <stack>
+ 
++#include <rex/platform.h>
++#if REX_PLATFORM_PS5
++#include <pthread.h>
++#endif
++
+ #include <rex/audio/audio_driver.h>
+ #include <rex/thread.h>
+ 
+@@ -49,6 +55,14 @@ class SDLAudioDriver : public AudioDriver {
+   std::queue<float*> frames_queued_ = {};
+   std::stack<float*> frames_unused_ = {};
+   std::mutex frames_mutex_ = {};
++
++#if REX_PLATFORM_PS5
++  // reEye: the PS5's audio out takes the place of SDL's device (sdl_audio_driver.cpp)
++  static void* Ps5OutputThread(void* driver);
++  int ps5_port_ = -1;
++  std::atomic<bool> ps5_running_{false};
++  pthread_t ps5_thread_{};
++#endif
+ };
+ 
+ }  // namespace rex::audio::sdl
 diff --git a/include/rex/chrono/chrono.h b/include/rex/chrono/chrono.h
 index 8761cff..2248fe9 100644
 --- a/include/rex/chrono/chrono.h
@@ -322,6 +357,104 @@ index 8449a0b..00f4bbb 100644
  #define REX_PHYS_HOST_OFFSET(addr) (((u32)(addr) >= 0xE0000000u) ? 0x1000u : 0u)
  #else
  #define REX_PHYS_HOST_OFFSET(addr) 0u
+diff --git a/src/audio/sdl/sdl_audio_driver.cpp b/src/audio/sdl/sdl_audio_driver.cpp
+index f7d928f..3aa7ced 100644
+--- a/src/audio/sdl/sdl_audio_driver.cpp
++++ b/src/audio/sdl/sdl_audio_driver.cpp
+@@ -42,7 +42,79 @@ SDLAudioDriver::~SDLAudioDriver() {
+   assert_true(frames_unused_.empty());
+ }
+ 
++#if REX_PLATFORM_PS5
++// reEye: the game's 48 kHz frames through the PS5's audio out, 16-bit stereo (the 5.1 frames folded down), as
++// reKing's ps5/audio_ps5.cpp. sceAudioOutOutput returns once the previous 256 samples (5.3 ms, one guest frame) are
++// taken, which paces the loop the way SDL's callback does: a frame played releases the guest's semaphore.
++extern "C" {
++int sceAudioOutInit(void);
++int sceAudioOutOpen(int user, int type, int index, unsigned grain, unsigned rate, unsigned format);
++int sceAudioOutOutput(int handle, const void* samples);
++int sceAudioOutSetVolume(int handle, int channel_mask, const int* volumes);
++int sceAudioOutClose(int handle);
++}
++
++void* SDLAudioDriver::Ps5OutputThread(void* p) {
++  auto* driver = static_cast<SDLAudioDriver*>(p);
++  float stereo[channel_samples_ * 2];
++  int16_t out[channel_samples_ * 2];
++  while (driver->ps5_running_.load(std::memory_order_relaxed)) {
++    float* buffer = nullptr;
++    {
++      std::unique_lock<std::mutex> guard(driver->frames_mutex_);
++      if (!driver->frames_queued_.empty()) {
++        buffer = driver->frames_queued_.front();
++        driver->frames_queued_.pop();
++      }
++    }
++    if (buffer && !REXCVAR_GET(audio_mute)) {
++      conversion::sequential_6_BE_to_interleaved_2_LE(stereo, buffer, channel_samples_);
++      const float volume = static_cast<float>(std::clamp(REXCVAR_GET(master_volume), 0.0, 1.0));
++      for (uint32_t i = 0; i < channel_samples_ * 2; ++i) {
++        out[i] = int16_t(std::clamp(stereo[i] * volume, -1.0f, 1.0f) * 32767.0f);
++      }
++    } else {
++      std::memset(out, 0, sizeof(out));
++    }
++    if (buffer) {
++      {
++        std::unique_lock<std::mutex> guard(driver->frames_mutex_);
++        driver->frames_unused_.push(buffer);
++      }
++      driver->semaphore_->Release(1, nullptr);
++    }
++    int rc = sceAudioOutOutput(driver->ps5_port_, out);
++    if (rc < 0) {
++      REXAPU_ERROR("PS5 audio out: output failed {:08X}, sound stops", uint32_t(rc));
++      break;
++    }
++  }
++  return nullptr;
++}
++#endif
++
+ bool SDLAudioDriver::Initialize() {
++#if REX_PLATFORM_PS5
++  sceAudioOutInit();  // already initialized is fine
++  // the system user (255), the main port, 256 samples a call, 48 kHz, 16-bit stereo (format 1)
++  ps5_port_ = sceAudioOutOpen(255, 0, 0, channel_samples_, frame_frequency_, 1);
++  if (ps5_port_ < 0) {
++    REXAPU_ERROR("PS5 audio out: sceAudioOutOpen failed {:08X}", uint32_t(ps5_port_));
++    return false;
++  }
++  const int unity[2] = {32768, 32768};
++  sceAudioOutSetVolume(ps5_port_, 3, unity);
++  ps5_running_ = true;
++  if (pthread_create(&ps5_thread_, nullptr, Ps5OutputThread, this) != 0) {
++    REXAPU_ERROR("PS5 audio out: no output thread");
++    ps5_running_ = false;
++    sceAudioOutClose(ps5_port_);
++    ps5_port_ = -1;
++    return false;
++  }
++  REXAPU_INFO("PS5 audio out: port {}, 48 kHz 16-bit stereo", ps5_port_);
++  return true;
++#endif
+   // Prevent SDL from interfering with timer resolution (causes FPS drops)
+   SDL_SetHintWithPriority(SDL_HINT_TIMER_RESOLUTION, "0", SDL_HINT_OVERRIDE);
+ 
+@@ -138,6 +210,13 @@ void SDLAudioDriver::SubmitFrame(uint32_t frame_ptr) {
+ }
+ 
+ void SDLAudioDriver::Shutdown() {
++#if REX_PLATFORM_PS5
++  if (ps5_running_.exchange(false)) pthread_join(ps5_thread_, nullptr);
++  if (ps5_port_ >= 0) {
++    sceAudioOutClose(ps5_port_);
++    ps5_port_ = -1;
++  }
++#endif
+   if (sdl_stream_) {
+     SDL_DestroyAudioStream(sdl_stream_);
+     sdl_stream_ = nullptr;
 diff --git a/src/core/exception_handler_posix.cpp b/src/core/exception_handler_posix.cpp
 index 8aced51..d56e6a4 100644
 --- a/src/core/exception_handler_posix.cpp
@@ -757,6 +890,36 @@ index e10e30b..dd17f21 100644
  #else
      int result = pthread_sigqueue(thread_, GetSystemSignal(SignalType::kThreadUserCallback), value);
  #endif
+diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
+index e132acb..f0445a8 100644
+--- a/src/input/input_system.cpp
++++ b/src/input/input_system.cpp
+@@ -159,9 +159,25 @@ X_RESULT InputSystem::GetKeystroke(uint32_t user_index, uint32_t flags,
+   return any_connected ? X_ERROR_EMPTY : X_ERROR_DEVICE_NOT_CONNECTED;
+ }
+ 
++#if REX_PLATFORM_PS5
++namespace ps5 {
++// reEye's ps5/input_ps5.cpp: the DualSense through libScePad
++std::unique_ptr<InputDriver> CreatePs5InputDriver();
++}  // namespace ps5
++#endif
++
+ std::unique_ptr<InputSystem> CreateDefaultInputSystem(bool tool_mode) {
+   auto input = std::make_unique<InputSystem>(nullptr);
+ 
++#if REX_PLATFORM_PS5
++  if (!tool_mode) {
++    auto ps5_driver = ps5::CreatePs5InputDriver();
++    if (ps5_driver->Setup() == X_STATUS_SUCCESS) {
++      input->AddDriver(std::move(ps5_driver));
++    }
++  }
++#endif
++
+   if (!tool_mode) {
+ #if REX_PLATFORM_WIN32
+     if (REXCVAR_GET(input_backend) == "xinput") {
 diff --git a/src/system/CMakeLists.txt b/src/system/CMakeLists.txt
 index 4c9d2e0..e9dbd87 100644
 --- a/src/system/CMakeLists.txt

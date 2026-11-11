@@ -57,7 +57,7 @@ if has compile; then
         -DPS5_PAYLOAD_SDK="$SDK" -DCMAKE_C_COMPILER=/usr/lib/llvm-18/bin/clang \
         -DCMAKE_CXX_COMPILER=/usr/lib/llvm-18/bin/clang++ -DCMAKE_BUILD_TYPE=Release -DREXSDK_DIR="$DEPS/rexglue" \
         -DREXGLUE_PS5=ON -DREXGLUE_USE_VULKAN=ON -DREXGLUE_ENABLE_TRACY=OFF -DREXGLUE_BUILD_TESTS=OFF \
-        -DREXGLUE_ENABLE_PERF_COUNTERS=OFF -DREXGLUE_PS5_HOST_SOURCES="$ROOT/ps5/app_ps5.cpp" \
+        -DREXGLUE_ENABLE_PERF_COUNTERS=OFF -DREXGLUE_PS5_HOST_SOURCES="$ROOT/ps5/app_ps5.cpp;$ROOT/ps5/input_ps5.cpp" \
         "${SDL[@]/#/-D}" > "$OUT/configure.log" 2>&1 ||
         { tail -30 "$OUT/configure.log"; echo "compile: CMake configure failed (see $OUT/configure.log)"; exit 1; }
     echo "$config" > "$B/.reeye-config"

@@ -82,8 +82,12 @@ class PS5Window final : public Window {
 
   // From the UI loop: paint when the presenter has asked for it
   void PaintIfRequested() {
-    if (paint_requested_.exchange(false)) OnPaint(true);
+    if (paint_requested_.exchange(false)) {
+      OnPaint(true);
+      paints_++;
+    }
   }
+  uint32_t TakePaints() { return paints_.exchange(0); }
 
  protected:
   bool OpenImpl() override {
@@ -120,10 +124,17 @@ class PS5Window final : public Window {
 
  private:
   std::atomic<bool> paint_requested_{false};
+  std::atomic<uint32_t> paints_{0};
 };
 
 void PS5WindowedAppContext::RunMainLoop() {
+  // every 10 s the log says how many pictures went to the screen, for telling a stall from a black picture
+  auto next_report = std::chrono::steady_clock::now() + std::chrono::seconds(10);
   while (!HasQuitFromUIThread()) {
+    if (std::chrono::steady_clock::now() >= next_report) {
+      next_report += std::chrono::seconds(10);
+      REXLOG_INFO("reEye: {} paints in the last 10 s", window_ ? window_->TakePaints() : 0u);
+    }
     {
       // wake for queued functions and paint requests; at the latest every frame, so a missed wake costs at most one
       std::unique_lock<std::mutex> lock(mutex_);
@@ -154,7 +165,9 @@ extern "C" int main(int argc, char** argv) {
   std::vector<std::string> args_storage = {argc > 0 && argv[0] ? argv[0] : "reeye",
                                            std::string("--game_data_root=") + kGameDir,
                                            std::string("--user_data_root=") + kUserDir,
-                                           std::string("--log_file=") + kLogFile};
+                                           std::string("--log_file=") + kLogFile,
+                                           // written out every second, so a stall or crash leaves the last lines
+                                           std::string("--log_flush_interval=1")};
   for (int i = 1; i < argc; ++i) args_storage.emplace_back(argv[i]);
   std::vector<char*> args;
   for (auto& a : args_storage) args.push_back(a.data());

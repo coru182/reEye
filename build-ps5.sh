@@ -61,7 +61,7 @@ if has compile; then
     set +e
     cmake --build "$B" --target ge -j "$JOBS" -- -k 0 > "$OUT/compile.log" 2>&1
     set -e
-    grep -E '^FAILED: ' "$OUT/compile.log" | sed -E 's/^FAILED: //' | grep -v -E '(^|/)(GoldenEye|ge)$|\.so$' |
+    grep -E '^FAILED: ' "$OUT/compile.log" | sed -E 's/^FAILED: //; s/[[:space:]]+$//' | grep -v -E '(^|/)(GoldenEye|ge)$|\.so$' |
         sort -u > "$OUT/compile-errors.txt" || true
     for f in "$ROOT"/ps5/*.c; do
         o=$OUT/host/$(basename "$f" .c).o

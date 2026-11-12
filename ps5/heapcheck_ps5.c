@@ -105,13 +105,21 @@ static size_t quarantine_bytes;
 static uint64_t next_serial;
 static uint64_t live_blocks, passes, last_pass_blocks;
 static int reported;
-static _Thread_local int capturing;
+/* Set on a thread while it records a call stack, so an allocation the unwinder might make records none. A pthread
+ * key and not _Thread_local: the PS5 build's thread-local variables are emulated (-femulated-tls), and a thread's
+ * first use of one allocates it with malloc, which would come back here forever (0.0.1's stack overflow before
+ * main). The keys live in the system library, which never calls this heap. */
+static pthread_key_t capturing_key;
+/* Call stacks are recorded from reeye_heapcheck_start (in main) on: before main the unwinder may not be ready, and
+ * blocks allocated then are checked all the same, without a stack */
+static int stacks_on;
 
 static void
 shards_init(void)
 {
    for (unsigned i = 0; i < HC_SHARDS; i++)
       pthread_mutex_init(&shards[i].lock, NULL);
+   pthread_key_create(&capturing_key, NULL);
 }
 
 static struct hc_shard *
@@ -158,12 +166,15 @@ __attribute__((noinline)) static void
 hc_capture(uintptr_t *pc, int max, int skip)
 {
    memset(pc, 0, (size_t)max * sizeof(*pc));
-   if (capturing)
+   if (!__atomic_load_n(&stacks_on, __ATOMIC_ACQUIRE))
       return;
-   capturing = 1;
+   pthread_once(&shards_once, shards_init);
+   if (pthread_getspecific(capturing_key))
+      return;
+   pthread_setspecific(capturing_key, (void *)1);
    struct hc_frames f = {.pc = pc, .max = max, .count = 0, .skip = 1 + skip};
    _Unwind_Backtrace(hc_collect, &f);
-   capturing = 0;
+   pthread_setspecific(capturing_key, NULL);
 }
 
 /* ------------------------------------------------------------------ checks */
@@ -528,6 +539,8 @@ hc_thread(void *unused)
 uint64_t
 reeye_heapcheck_start(void)
 {
+   pthread_once(&shards_once, shards_init);
+   __atomic_store_n(&stacks_on, 1, __ATOMIC_RELEASE);
    uintptr_t frames[HC_ALLOC_FRAMES];
    struct timespec t0, t1;
    clock_gettime(CLOCK_MONOTONIC, &t0);

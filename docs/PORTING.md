@@ -26,6 +26,13 @@ the game's sources in `patches/goldeneye-ps5.patch`.
   every run (RADV's `vkAcquireNextImageKHR` from the presenter's first paint, on the main thread; once on the GPU
   command thread). The damage happens earlier, elsewhere: `ps5/heapcheck_ps5.c` (guard bytes around every block,
   freed blocks kept back and checked, a scan every 2 seconds) is built in to name the block and who allocated it.
+- The heap checks named it: `rex::thread::Fiber::ConvertCurrentThread` (every XThread), 976 bytes, zeros written past
+  its end by `getcontext`, the PS5's own, which fills Sony's larger `ucontext_t`. Fibers now switch stacks without
+  ucontext on the PS5 (tested on Linux, as the PS5 code: 500,000 switches on 9 threads, registers, rounding mode,
+  exceptions and unwinding inside fibers). With the guard bytes taking the overrun, the game got as far as loading
+  the title screen's textures.
+- Other structs the system fills may differ from the SDK headers the same way (`stat`, `dirent`, `sigaction`...): the
+  heap checks stay on to catch the next one.
 
 ## 1. Guest memory (the big one)
 

@@ -28,6 +28,10 @@ builds for Linux. See `docs/PORTING.md`.
 - Sound: on the PS5 the SDL audio driver plays through `sceAudioOut` (48 kHz 16-bit stereo, one 256-sample frame a
   call) instead of SDL's device, which the PS5's SDL lacks (`audio/sdl/sdl_audio_driver.cpp`).
 - Input: the default input system takes reEye's `ps5/input_ps5.cpp` (the DualSense through libScePad) on the PS5.
+- Fibers (`core/fiber_posix.cpp`, `rex/thread/fiber.h`): no ucontext on the PS5. Its `getcontext` writes Sony's
+  `ucontext_t`, larger than the SDK headers' struct, which overran every thread's `Fiber` on the heap (the abort in
+  `mspace_malloc` at the first frame). A fiber is a saved stack pointer instead, switched by a few instructions
+  that keep the registers the x86-64 ABI asks a callee to keep (`rex_ps5_fiber_switch`).
 - Guest memory (`core/memory_posix.cpp`, `system/xmemory.cpp`): the 4.5 GB "file mapping" is one PS5 direct-memory
   object (`ps5platform/shm.h`), mapped at Xenia's views inside one reserved range; commit, decommit and release in
   the views are protection changes on whole 16 KB pages. The 0xE0000000 heap's 4 KB offset is applied as on Windows

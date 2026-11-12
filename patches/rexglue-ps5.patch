@@ -250,6 +250,41 @@ index 3c3969a..2e79d9f 100644
    return (guest_addr >= 0xE0000000u) ? 0x1000u : 0u;
  #else
    return 0u;
+diff --git a/include/rex/thread/fiber.h b/include/rex/thread/fiber.h
+index 64e70a7..fb1d1d6 100644
+--- a/include/rex/thread/fiber.h
++++ b/include/rex/thread/fiber.h
+@@ -14,7 +14,11 @@
+ #include <rex/platform.h>
+ #include <cstddef>
+ 
+-#if REX_PLATFORM_LINUX || REX_PLATFORM_MAC
++#if REX_PLATFORM_PS5
++// reEye: no ucontext on the PS5 (fiber_posix.cpp switches stacks itself)
++#include <cstdint>
++#include <vector>
++#elif REX_PLATFORM_LINUX || REX_PLATFORM_MAC
+ #include <ucontext.h>
+ #include <cstdint>
+ #include <vector>
+@@ -51,6 +55,17 @@ struct Fiber {
+ #if REX_PLATFORM_WIN32
+   void* handle_ = nullptr;
+   bool is_thread_fiber_ = false;
++#elif REX_PLATFORM_PS5
++  // reEye: the PS5's getcontext/swapcontext write Sony's ucontext_t, larger than the SDK headers' (it overran this
++  // object's heap block, 0.0.1). A fiber here is its saved stack pointer: the switch pushes the callee-saved
++  // registers on the fiber's own stack and keeps only where they are.
++  void* sp_ = nullptr;
++  std::vector<uint8_t> stack_;
++  void (*entry_)(void*) = nullptr;
++  void* arg_ = nullptr;
++  bool is_thread_fiber_ = false;
++
++  static void Trampoline();
+ #elif REX_PLATFORM_LINUX
+   ucontext_t context_{};
+   std::vector<uint8_t> stack_;
 diff --git a/include/rex/ui/surface.h b/include/rex/ui/surface.h
 index 34e1d65..913cc25 100644
 --- a/include/rex/ui/surface.h
@@ -592,6 +627,138 @@ index 8aced51..d56e6a4 100644
                      &thread_context.xmm_registers[modified_register_index], sizeof(vec128_t));
        }
  #elif REX_ARCH_ARM64
+diff --git a/src/core/fiber_posix.cpp b/src/core/fiber_posix.cpp
+index e7c53fd..3e55fe4 100644
+--- a/src/core/fiber_posix.cpp
++++ b/src/core/fiber_posix.cpp
+@@ -10,7 +10,120 @@
+  */
+ 
+ #include <rex/platform.h>
+-#if REX_PLATFORM_LINUX || REX_PLATFORM_MAC
++#if REX_PLATFORM_PS5
++// reEye: fibers on the PS5 without ucontext. The PS5's getcontext/swapcontext (in the system library) write Sony's
++// ucontext_t, which is larger than the SDK headers' struct, so getcontext overran the Fiber's heap block. Here a
++// fiber is a stack pointer: rex_ps5_fiber_switch pushes the registers the x86-64 System V ABI has a callee keep
++// (rbx, rbp, r12-r15, and the MXCSR and x87 control words), stores the stack pointer, loads the other fiber's, and
++// pops its registers. Everything else is the caller's to save, which the compiler does around the call.
++
++#include <rex/thread/fiber.h>
++
++#include <cassert>
++#include <cstdint>
++#include <cstdlib>
++#include <cstring>
++
++extern "C" void rex_ps5_fiber_switch(void** save_sp, void* load_sp);
++
++// The stack it leaves, from the saved stack pointer up: [MXCSR (4 bytes), x87 control word (2), unused (2)], r15,
++// r14, r13, r12, rbx, rbp, then the address to return to.
++asm(R"(
++    .text
++    .p2align 4
++    .globl rex_ps5_fiber_switch
++    .hidden rex_ps5_fiber_switch
++    .type rex_ps5_fiber_switch, @function
++rex_ps5_fiber_switch:
++    pushq %rbp
++    pushq %rbx
++    pushq %r12
++    pushq %r13
++    pushq %r14
++    pushq %r15
++    subq $8, %rsp
++    stmxcsr (%rsp)
++    fnstcw 4(%rsp)
++    movq %rsp, (%rdi)
++    movq %rsi, %rsp
++    ldmxcsr (%rsp)
++    fldcw 4(%rsp)
++    addq $8, %rsp
++    popq %r15
++    popq %r14
++    popq %r13
++    popq %r12
++    popq %rbx
++    popq %rbp
++    ret
++    .size rex_ps5_fiber_switch, .-rex_ps5_fiber_switch
++)");
++
++namespace rex::thread {
++
++thread_local Fiber* Fiber::tls_current_ = nullptr;
++
++Fiber* Fiber::ConvertCurrentThread() {
++  // the thread's own stack: its stack pointer is saved the first time it switches away
++  auto* f = new Fiber();
++  f->is_thread_fiber_ = true;
++  tls_current_ = f;
++  return f;
++}
++
++Fiber* Fiber::Create(size_t stack_size, void (*entry)(void*), void* arg) {
++  auto* f = new Fiber();
++  f->entry_ = entry;
++  f->arg_ = arg;
++  f->stack_.resize(stack_size < 64 * 1024 ? 64 * 1024 : stack_size);
++
++  // A first switch to the fiber pops this frame and returns into Trampoline as if it had been called: at its first
++  // instruction the stack pointer is 8 past a 16-byte boundary, the slot above holding a null return address (the
++  // end of the stack for an unwinder). The fiber starts with the creating thread's floating-point control words.
++  const uintptr_t top = (reinterpret_cast<uintptr_t>(f->stack_.data()) + f->stack_.size()) & ~uintptr_t(15);
++  auto* frame = reinterpret_cast<uint64_t*>(top - 72);
++  uint32_t mxcsr;
++  uint16_t fcw;
++  asm volatile("stmxcsr %0" : "=m"(mxcsr));
++  asm volatile("fnstcw %0" : "=m"(fcw));
++  frame[0] = 0;
++  std::memcpy(&frame[0], &mxcsr, sizeof(mxcsr));
++  std::memcpy(reinterpret_cast<uint8_t*>(&frame[0]) + 4, &fcw, sizeof(fcw));
++  for (int i = 1; i <= 6; ++i) frame[i] = 0;  // r15, r14, r13, r12, rbx, rbp
++  frame[7] = reinterpret_cast<uintptr_t>(&Fiber::Trampoline);
++  frame[8] = 0;
++  f->sp_ = frame;
++  return f;
++}
++
++/*static*/ void Fiber::Trampoline() {
++  // tls_current_ was updated by SwitchTo before the switch returned here.
++  Fiber* f = tls_current_;
++  f->entry_(f->arg_);
++  // A fiber's entry must not return (as with ucontext and no uc_link, the thread would end): there is nothing to
++  // return to.
++  std::abort();
++}
++
++void Fiber::SwitchTo(Fiber* target) {
++  Fiber* from = tls_current_;
++  tls_current_ = target;
++  rex_ps5_fiber_switch(&from->sp_, target->sp_);
++}
++
++void Fiber::Destroy() {
++  // Thread fibers are destroyed from the owning thread itself.
++  if (is_thread_fiber_) {
++    tls_current_ = nullptr;
++  } else {
++    assert(this != tls_current_ && "Destroy called on the currently running fiber");
++  }
++  delete this;
++}
++
++}  // namespace rex::thread
++
++#elif REX_PLATFORM_LINUX || REX_PLATFORM_MAC
+ 
+ #include <rex/thread/fiber.h>
+ 
+@@ -75,4 +188,4 @@ void Fiber::Destroy() {
+ 
+ }  // namespace rex::thread
+ 
+-#endif  // REX_PLATFORM_LINUX || REX_PLATFORM_MAC
++#endif  // REX_PLATFORM_PS5, REX_PLATFORM_LINUX || REX_PLATFORM_MAC
 diff --git a/src/core/filesystem_posix.cpp b/src/core/filesystem_posix.cpp
 index 00648e4..c389c09 100644
 --- a/src/core/filesystem_posix.cpp

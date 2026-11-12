@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# reEye: the call stack of a crash.txt (written by abort() on the console) as function names and source lines.
+# reEye: a crash.txt or heapcheck.txt (written on the console) with its call stacks as function names and source
+# lines; every other line is kept as it is.
 #   tools/symbolize-crash.sh /path/to/crash.txt [build-ps5/link/llvm-pie.elf]
-# The program loads somewhere else than the link put it: the base is where main is now (crash.txt's "main at")
+# The program loads somewhere else than the link put it: the base is where main is now (the file's "main at")
 # minus main's address in the linked program. Every problem is printed on standard output, so it ends up in the
 # file the output is saved to.
 crash=${1:-}
@@ -20,9 +21,13 @@ main_link=$(llvm-nm-18 "$elf" 2>&1 | awk '$3 == "main" && !found { print $1; fou
 [ -n "$main_link" ] || fail "no main in $elf"
 base=$(( 0x$main_now - 0x$main_link ))
 printf 'program %s\nmain at 0x%s, linked at 0x%s: load base 0x%x\n' "$elf" "$main_now" "$main_link" "$base"
-grep -oE '#[0-9]+ 0x[0-9a-fA-F]+' "$crash" | while read -r frame addr; do
-    # return addresses: the call is the instruction before
-    off=$(( addr - base - 1 ))
-    printf '%s 0x%x  ' "$frame" "$off"
-    llvm-symbolizer-18 --obj="$elf" -C -f --inlines "0x$(printf '%x' "$off")" 2>&1 | sed '/^$/d' | paste -sd' ' -
+tr -d '\r' < "$crash" | while IFS= read -r line; do
+    if [[ $line =~ ^[[:space:]]*#([0-9]+)[[:space:]]+0x([0-9a-fA-F]+) ]]; then
+        # return addresses: the call is the instruction before
+        off=$(( 0x${BASH_REMATCH[2]} - base - 1 ))
+        printf '  #%s 0x%x  ' "${BASH_REMATCH[1]}" "$off"
+        llvm-symbolizer-18 --obj="$elf" -C -f --inlines "0x$(printf '%x' "$off")" 2>&1 | sed '/^$/d' | paste -sd' ' -
+    elif [[ $line != "main at "* ]]; then
+        printf '%s\n' "$line"
+    fi
 done

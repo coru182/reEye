@@ -7,6 +7,8 @@
 #   art/           optional: your own icon0.png, pic0.dds, pic1.dds, in place of package/sce_sys's
 #   deps/          reUndr-ps5's PS5 toolchain (PayloadSDK, RADV, the packaging tool), as reKing uses it
 # Stages: ./build-ps5.sh [compile] [link] [package]  (all three when none is named). JOBS=<n> compiles n at a time.
+# HEAPCHECK=1 (the default for now) builds in ps5/heapcheck_ps5.c's heap checks, which find what damages the heap
+# and write it to /data/reeye/heapcheck.txt on the console; HEAPCHECK=0 leaves them out (faster, less memory).
 #
 # STATUS: work in progress. The compile stage builds ReXGlue and the game with the PS5 compiler and keeps going past
 # errors, so build-ps5/compile-errors.txt lists every source the port still has to change (docs/PORTING.md).
@@ -22,6 +24,7 @@ OUT=$ROOT/build-ps5
 TITLE=PPSA99070
 VERSION=0.0.1
 JOBS=${JOBS:-$(nproc)}
+HEAPCHECK=${HEAPCHECK:-1}
 export PATH=/usr/lib/llvm-18/bin:$PATH
 # the SDK's prospero-* wrappers pick the newest LLVM installed (clang 20 is there for the ReXGlue CLI): keep them on
 # LLVM 18, the toolchain everything here is built with
@@ -68,11 +71,15 @@ if has compile; then
     set -e
     grep -E '^FAILED: ' "$OUT/compile.log" | sed -E 's/^FAILED: //; s/[[:space:]]+$//' | grep -v -E '(^|/)(GoldenEye|ge)$|\.so$' |
         sort -u > "$OUT/compile-errors.txt" || true
+    # the PS5 host's C files; all of them again when their flags change
+    host_flags="-std=c11 -O2 -ffunction-sections -fdata-sections -fno-plt -DREEYE_HEAPCHECK=$HEAPCHECK"
+    [ "$(cat "$OUT/host/.flags" 2>/dev/null)" = "$host_flags" ] || rm -f "$OUT"/host/*.o
     for f in "$ROOT"/ps5/*.c; do
         o=$OUT/host/$(basename "$f" .c).o
-        [ "$o" -nt "$f" ] || "$SDK/bin/prospero-clang" -std=c11 -O2 -ffunction-sections -fdata-sections -fno-plt \
-            -I"$ROOT" -c "$f" -o "$o" || exit 1
+        [ "$o" -nt "$f" ] || "$SDK/bin/prospero-clang" $host_flags -I"$ROOT" -c "$f" -o "$o" || exit 1
     done
+    echo "$host_flags" > "$OUT/host/.flags"
+    echo "compile: heap checks $([ "$HEAPCHECK" = 1 ] && echo on || echo off) (HEAPCHECK=$HEAPCHECK)"
     if [ -s "$OUT/compile-errors.txt" ]; then
         echo "compile: $(wc -l < "$OUT/compile-errors.txt") targets still fail on the PS5 (see $OUT/compile-errors.txt"
         echo "         and the errors in $OUT/compile.log)"

@@ -21,6 +21,11 @@ the game's sources in `patches/goldeneye-ps5.patch`.
   guest address space" without it).
 - Guest memory works on the console (0.0.1: the game loads its files, then the screen stays black).
 - Sound (sceAudioOut in the SDL driver) and input (libScePad, controller 1): first try.
+- Sound and the DualSense work on the console; the game loads its data and reaches its first frame, then aborts:
+  the title heap finds itself damaged (dlmalloc's check, in `mspace_malloc`) at the next allocation, the same place
+  every run (RADV's `vkAcquireNextImageKHR` from the presenter's first paint, on the main thread; once on the GPU
+  command thread). The damage happens earlier, elsewhere: `ps5/heapcheck_ps5.c` (guard bytes around every block,
+  freed blocks kept back and checked, a scan every 2 seconds) is built in to name the block and who allocated it.
 
 ## 1. Guest memory (the big one)
 

@@ -39,6 +39,16 @@ constexpr uint32_t kOutputWidth = 1920;
 constexpr uint32_t kOutputHeight = 1080;
 }  // namespace
 
+// ps5/heapcheck_ps5.c: the heap checks (build-ps5.sh HEAPCHECK=1), or calls that do nothing
+extern "C" uint64_t reeye_heapcheck_start(void);
+extern "C" void reeye_heapcheck_scan(void);
+extern "C" int reeye_heapcheck_stats(uint64_t* allocations, uint64_t* scans, uint64_t* checked, uint64_t* live,
+                                     uint64_t* kept_bytes);
+namespace {
+// how long the heap checks take to record one call stack, in ns (0: the checks are not built in)
+uint64_t g_heapcheck_stack_ns = 0;
+}  // namespace
+
 namespace rex::ui {
 
 class PS5Window;
@@ -136,10 +146,20 @@ class PS5Window final : public Window {
 void PS5WindowedAppContext::RunMainLoop() {
   // every 10 s the log says how many pictures went to the screen, for telling a stall from a black picture
   auto next_report = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  // main started the heap checks before the log file was open
+  if (g_heapcheck_stack_ns) {
+    REXLOG_INFO("reEye: heap check on (a call stack takes {} us to record); damage goes to /data/reeye/heapcheck.txt",
+                g_heapcheck_stack_ns / 1000.0);
+  }
   while (!HasQuitFromUIThread()) {
     if (std::chrono::steady_clock::now() >= next_report) {
       next_report += std::chrono::seconds(10);
       REXLOG_INFO("reEye: {} paints in the last 10 s", window_ ? window_->TakePaints() : 0u);
+      uint64_t allocations, scans, checked, live, kept;
+      if (reeye_heapcheck_stats(&allocations, &scans, &checked, &live, &kept)) {
+        REXLOG_INFO("reEye: heap check: {} allocations, {} live; {} scans, the last of {} blocks; {} MB kept back",
+                    allocations, live, scans, checked, kept >> 20);
+      }
     }
     {
       // wake for queued functions and paint requests; at the latest every frame, so a missed wake costs at most one
@@ -207,6 +227,8 @@ extern "C" [[noreturn]] void __wrap_abort(void) {
       write(fd, line, size_t(n));
       close(fd);
     }
+    // with the heap checks built in: one more scan, written to /data/reeye/heapcheck.txt when it finds damage
+    reeye_heapcheck_scan();
   }
   __real_abort();
 }
@@ -231,6 +253,14 @@ extern "C" int main(int argc, char** argv) {
   rex::cvar::ApplyEnvironment();
   rex::InitLoggingEarly();
   REXLOG_INFO("reEye: starting (game files in {}, saves and settings in {})", kGameDir, kUserDir);
+  {
+    uint64_t allocations, scans, checked, live, kept;
+    if (reeye_heapcheck_stats(&allocations, &scans, &checked, &live, &kept)) {
+      unlink("/data/reeye/heapcheck.txt");  // a report from an earlier run would mislead
+      g_heapcheck_stack_ns = reeye_heapcheck_start();
+      if (!g_heapcheck_stack_ns) g_heapcheck_stack_ns = 1;
+    }
+  }
 
   int result;
   {

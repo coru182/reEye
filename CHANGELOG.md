@@ -6,3 +6,5 @@
   ReXGlue CLI and recompiles the game from your own `default.xex`; `build-ps5.sh` compiles it with the PS5 compiler
   (listing what still fails), then links and packages it as reKing does.
 - The porting plan: `docs/PORTING.md`.
+- Diagnostics on the console: `crash.txt` (the call stack at an abort), `heapcheck.txt` (heap checks that find what
+  damages the heap, `ps5/heapcheck_ps5.c`, on while `HEAPCHECK=1`), and `tools/symbolize-crash.sh` for both.

@@ -1105,6 +1105,28 @@ index 4c9d2e0..e9dbd87 100644
  add_library(rex::runtime ALIAS rexruntime)
  add_library(rex::system ALIAS rexruntime)
  add_library(rex::kernel ALIAS rexruntime)
+diff --git a/src/system/function_dispatcher.cpp b/src/system/function_dispatcher.cpp
+index 67f7070..cf8a26b 100644
+--- a/src/system/function_dispatcher.cpp
++++ b/src/system/function_dispatcher.cpp
+@@ -35,6 +35,17 @@ FunctionDispatcher* GetBoundFunctionDispatcher() {
+ }  // namespace
+ 
+ static void InvalidFunctionTrap(PPCContext& ctx, uint8_t* /*base*/) {
++#if REX_PLATFORM_PS5
++  // reEye: the guest's registers at the bad call, for finding where the target was read from (the caller's frame
++  // shows in crash.txt; these show the object it loaded the pointer from)
++  REXLOG_CRITICAL(
++      "invalid call: target 0x{:08X} lr 0x{:08X} ctr 0x{:08X} r1 0x{:08X} | r3 0x{:08X} r4 0x{:08X} r5 0x{:08X} "
++      "r6 0x{:08X} r7 0x{:08X} r8 0x{:08X} r9 0x{:08X} r10 0x{:08X} r11 0x{:08X} r12 0x{:08X} | r26 0x{:08X} "
++      "r27 0x{:08X} r28 0x{:08X} r29 0x{:08X} r30 0x{:08X} r31 0x{:08X}",
++      ctx.last_indirect_target, uint32_t(ctx.lr), ctx.ctr.u32, ctx.r1.u32, ctx.r3.u32, ctx.r4.u32, ctx.r5.u32,
++      ctx.r6.u32, ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32, ctx.r11.u32, ctx.r12.u32, ctx.r26.u32,
++      ctx.r27.u32, ctx.r28.u32, ctx.r29.u32, ctx.r30.u32, ctx.r31.u32);
++#endif
+   REX_FATAL("Call to invalid or unregistered function at guest address 0x{:08X}",
+             ctx.last_indirect_target);
+ }
 diff --git a/src/system/xmemory.cpp b/src/system/xmemory.cpp
 index ca7f4e8..01f4c27 100644
 --- a/src/system/xmemory.cpp

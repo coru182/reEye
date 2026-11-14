@@ -1106,10 +1106,23 @@ index 4c9d2e0..e9dbd87 100644
  add_library(rex::system ALIAS rexruntime)
  add_library(rex::kernel ALIAS rexruntime)
 diff --git a/src/system/function_dispatcher.cpp b/src/system/function_dispatcher.cpp
-index 67f7070..cf8a26b 100644
+index 67f7070..033129d 100644
 --- a/src/system/function_dispatcher.cpp
 +++ b/src/system/function_dispatcher.cpp
-@@ -35,6 +35,17 @@ FunctionDispatcher* GetBoundFunctionDispatcher() {
+@@ -22,6 +22,12 @@
+ #include <rex/runtime.h>
+ #include <rex/system/function_dispatcher.h>
+ #include <rex/system/thread_state.h>
++#if REX_PLATFORM_PS5
++#include <cstring>
++#include <string>
++#include <fmt/format.h>
++#include <rex/system/xmemory.h>
++#endif
+ 
+ namespace rex::runtime {
+ 
+@@ -35,6 +41,61 @@ FunctionDispatcher* GetBoundFunctionDispatcher() {
  }  // namespace
  
  static void InvalidFunctionTrap(PPCContext& ctx, uint8_t* /*base*/) {
@@ -1123,6 +1136,50 @@ index 67f7070..cf8a26b 100644
 +      ctx.last_indirect_target, uint32_t(ctx.lr), ctx.ctr.u32, ctx.r1.u32, ctx.r3.u32, ctx.r4.u32, ctx.r5.u32,
 +      ctx.r6.u32, ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32, ctx.r11.u32, ctx.r12.u32, ctx.r26.u32,
 +      ctx.r27.u32, ctx.r28.u32, ctx.r29.u32, ctx.r30.u32, ctx.r31.u32);
++  if (Runtime* runtime = Runtime::instance(); runtime && runtime->memory()) {
++    memory::Memory* mem = runtime->memory();
++    // guest words as the guest sees them (big-endian), only from pages its heap says are readable
++    auto word = [&](uint32_t a, uint32_t* out) {
++      memory::BaseHeap* heap = mem->LookupHeap(a);
++      uint32_t protect = 0;
++      if (!heap || !heap->QueryProtect(a, &protect) || !(protect & memory::kMemoryProtectRead)) return false;
++      uint32_t v;
++      std::memcpy(&v, mem->TranslateVirtual(a), 4);
++      *out = __builtin_bswap32(v);
++      return true;
++    };
++    auto dump = [&](const char* what, uint32_t a, int words) {
++      for (int row = 0; row < words; row += 8) {
++        std::string line;
++        for (int i = row; i < row + 8 && i < words; ++i) {
++          uint32_t v;
++          line += word(a + 4 * i, &v) ? fmt::format(" {:08X}", v) : std::string(" --------");
++        }
++        REXLOG_CRITICAL("invalid call: {} {:08X}:{}", what, a + 4 * row, line);
++      }
++    };
++    // the object the worker read the target from, and what it was reading (r5): when r5 is in physical memory,
++    // the same bytes through every view of it, which must agree (one direct-memory object mapped several times)
++    dump("r31", ctx.r31.u32, 32);
++    dump("r31+320", ctx.r31.u32 + 320, 16);
++    const uint32_t at = ctx.r5.u32 & ~31u;
++    dump("r5-64", at - 64, 32);
++    if (at >= 0xA0000000u) {
++      const uint32_t physical = mem->GetPhysicalAddress(at);
++      std::string raw;
++      for (int i = 0; i < 16; ++i) {
++        uint32_t v;
++        std::memcpy(&v, mem->TranslatePhysical(physical + 4 * i), 4);
++        raw += fmt::format(" {:08X}", __builtin_bswap32(v));
++      }
++      REXLOG_CRITICAL("invalid call: physical {:08X} (raw view):{}", physical, raw);
++      dump("as A0", 0xA0000000u + physical, 16);
++      dump("as C0", 0xC0000000u + physical, 16);
++      if (physical >= 0x1000u) dump("as E0", 0xE0000000u + physical - 0x1000u, 16);
++      REXLOG_CRITICAL("invalid call: host {:p} (r5's view) {:p} (raw)", static_cast<void*>(mem->TranslateVirtual(at)),
++                      static_cast<void*>(mem->TranslatePhysical(physical)));
++    }
++  }
 +#endif
    REX_FATAL("Call to invalid or unregistered function at guest address 0x{:08X}",
              ctx.last_indirect_target);

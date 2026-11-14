@@ -36,6 +36,12 @@ the game's sources in `patches/goldeneye-ps5.patch`.
   completion by writing guest memory at `base + address`, without the 0xE0000000 range's 4 KB offset that the PS5
   build applies (16 KB pages, as on Windows): their writes to the fence block (0xFFC9B000) missed it.
   `goldeneye-ps5.patch` routes them through the offset.
+- With the offset the game draws its first screen (the "Nintendo logo" joke screen, 2026-11-14). Then either a stall
+  (the frozen picture, sound looping, watchdog "completed=0") or an abort: the render worker (sub_821A4A68 ->
+  sub_821A4750) walks the game's command list in physical memory (r5 = 0xDFBDB2B4) and finds a zero header, whose
+  callback (r31+16) was never set: a call to 0. At the same millisecond the GPU gets a resolve with an empty region.
+  Both read zeros where commands should be. The trap now dumps the worker's state and the bytes at r5 through every
+  view of that physical memory (raw, A0, C0, E0), to tell unwritten memory from views that disagree.
 - Other structs the system fills may differ from the SDK headers the same way (`stat`, `dirent`, `sigaction`...): the
   heap checks stay on to catch the next one.
 

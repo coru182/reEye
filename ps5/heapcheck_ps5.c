@@ -58,6 +58,7 @@ int __real_posix_memalign(void **out, size_t alignment, size_t bytes);
 __attribute__((weak)) size_t __real_malloc_usable_size(const void *pointer);
 
 extern int main(int argc, char **argv);
+extern const char reeye_build_id[]; /* build-ps5.sh */
 
 #define HC_ALLOC_FRAMES 10
 #define HC_FREE_FRAMES 6
@@ -291,7 +292,7 @@ hc_report(const char *what, const struct hc_block *b, const void *pointer, const
    }
    report_fd = open(HC_REPORT_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0666);
    out("heapcheck: %s\n", what);
-   out("main at %p\nthread %p\n", (void *)&main, (void *)pthread_self());
+   out("build %s\nmain at %p\nthread %p\n", reeye_build_id, (void *)&main, (void *)pthread_self());
    if (pointer)
       out("pointer %p\n", pointer);
    if (b && hc_plausible(b)) {

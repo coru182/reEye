@@ -44,6 +44,9 @@ extern "C" uint64_t reeye_heapcheck_start(void);
 extern "C" void reeye_heapcheck_scan(void);
 extern "C" int reeye_heapcheck_stats(uint64_t* allocations, uint64_t* scans, uint64_t* checked, uint64_t* live,
                                      uint64_t* kept_bytes);
+// this build's ID (build-ps5.sh writes it: commit and time), in the log and crash.txt
+extern "C" const char reeye_build_id[];
+
 namespace {
 // how long the heap checks take to record one call stack, in ns (0: the checks are not built in)
 uint64_t g_heapcheck_stack_ns = 0;
@@ -146,6 +149,7 @@ class PS5Window final : public Window {
 void PS5WindowedAppContext::RunMainLoop() {
   // every 10 s the log says how many pictures went to the screen, for telling a stall from a black picture
   auto next_report = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  REXLOG_INFO("reEye: build {}", reeye_build_id);
   // main started the heap checks before the log file was open
   if (g_heapcheck_stack_ns) {
     REXLOG_INFO("reEye: heap check on (a call stack takes {} us to record); damage goes to /data/reeye/heapcheck.txt",
@@ -210,8 +214,8 @@ extern "C" [[noreturn]] void __wrap_abort(void) {
     if (fd >= 0) {
       char line[160];
       // the program's load address, from where main is now and where the link put it (the symbol list's address)
-      int n = snprintf(line, sizeof line, "abort() called\nmain at %p\nthread %p\n", reinterpret_cast<void*>(&main),
-                       reinterpret_cast<void*>(pthread_self()));
+      int n = snprintf(line, sizeof line, "abort() called\nbuild %s\nmain at %p\nthread %p\n", reeye_build_id,
+                       reinterpret_cast<void*>(&main), reinterpret_cast<void*>(pthread_self()));
       write(fd, line, size_t(n));
       Frames frames{};
       _Unwind_Backtrace(CollectFrame, &frames);

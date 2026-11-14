@@ -72,8 +72,10 @@ The app writes what it knows to `/data/reeye` before it ends:
   the heap: which block, how big, the call stack that allocated it (and freed it), the bytes found, and the call
   stack that found it (`ps5/heapcheck_ps5.c`). `HEAPCHECK=0 ./build-ps5.sh` leaves the checks out.
 
-Copy them to the build machine and turn their call stacks into function names with the program that ran (the one in
-`build-ps5/link`, so rebuild nothing in between):
+Each build has an ID (commit and time: `compile: build ...` when it is built, `reEye: build ...` in the log, `build ...`
+in `crash.txt` and `heapcheck.txt`). Copy the files to the build machine and turn their call stacks into function
+names with the program that ran (the one in `build-ps5/link`, so rebuild nothing in between; the script refuses a
+crash from another build):
 
 ```sh
 tools/symbolize-crash.sh crash.txt

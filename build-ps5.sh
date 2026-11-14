@@ -79,6 +79,13 @@ if has compile; then
         [ "$o" -nt "$f" ] || "$SDK/bin/prospero-clang" $host_flags -I"$ROOT" -c "$f" -o "$o" || exit 1
     done
     echo "$host_flags" > "$OUT/host/.flags"
+    # this build's ID (commit, + when the tree has changes, and the time): in the log and crash.txt on the console and
+    # beside the linked program, so a crash is never read against another build (tools/symbolize-crash.sh checks)
+    build_id="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo nogit)$(git -C "$ROOT" diff --quiet HEAD 2>/dev/null || echo +)-$(date +%Y%m%d-%H%M%S)"
+    printf '/* written by build-ps5.sh */\nconst char reeye_build_id[] = "%s";\n' "$build_id" > "$OUT/host/build_id.c"
+    "$SDK/bin/prospero-clang" $host_flags -c "$OUT/host/build_id.c" -o "$OUT/host/build_id.o" || exit 1
+    echo "$build_id" > "$OUT/host/build_id.txt"
+    echo "compile: build $build_id"
     echo "compile: heap checks $([ "$HEAPCHECK" = 1 ] && echo on || echo off) (HEAPCHECK=$HEAPCHECK)"
     if [ -s "$OUT/compile-errors.txt" ]; then
         echo "compile: $(wc -l < "$OUT/compile-errors.txt") targets still fail on the PS5 (see $OUT/compile-errors.txt"
@@ -159,7 +166,8 @@ if has link; then
     # for reading a crash: the PS5's crash dialog gives addresses; the app loads at 0x400000, so address - 0x400000
     # is the offset to look up here
     llvm-nm-18 -n -C "$work/llvm-pie.elf" > "$OUT/symbols-$VERSION.txt" 2>/dev/null || true
-    echo "link: $(du -h "$work/llvm-pie.elf" | cut -f1) $work/llvm-pie.elf"
+    cp "$OUT/host/build_id.txt" "$work/build_id.txt" 2>/dev/null || echo unknown > "$work/build_id.txt"
+    echo "link: $(du -h "$work/llvm-pie.elf" | cut -f1) $work/llvm-pie.elf (build $(cat "$work/build_id.txt"))"
 fi
 
 if has package; then

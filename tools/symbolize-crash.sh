@@ -20,6 +20,15 @@ main_link=$(llvm-nm-18 "$elf" 2>&1 | awk '$3 == "main" && !found { print $1; fou
 [ -n "$main_now" ] || fail "no 'main at' line in $crash"
 [ -n "$main_link" ] || fail "no main in $elf"
 base=$(( 0x$main_now - 0x$main_link ))
+# the build that crashed and the one here must be the same, or every name below is wrong
+crash_build=$(sed -n 's/^build //p' "$crash" | sed -n 1p)
+elf_build=$(cat "$(dirname "$elf")/build_id.txt" 2>/dev/null || true)
+if [ -n "$crash_build" ] && [ -n "$elf_build" ] && [ "$crash_build" != "$elf_build" ]; then
+    fail "this crash is from build $crash_build, but the program here is build $elf_build: the names would be wrong"
+fi
+if [ -z "$crash_build" ] || [ "$base" != $((0x400000)) ]; then
+    echo "symbolize-crash: WARNING: $( [ -z "$crash_build" ] && echo "the crash file names no build (an older one)" || echo "load base is not 0x400000" ): it is probably from another build, and the names below would be wrong"
+fi
 printf 'program %s\nmain at 0x%s, linked at 0x%s: load base 0x%x\n' "$elf" "$main_now" "$main_link" "$base"
 tr -d '\r' < "$crash" | while IFS= read -r line; do
     if [[ $line =~ ^[[:space:]]*#([0-9]+)[[:space:]]+0x([0-9a-fA-F]+) ]]; then

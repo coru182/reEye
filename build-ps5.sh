@@ -123,7 +123,9 @@ if has link; then
       printf '*;};\n'; } > "$work/exports.map"
     # the game's objects and every static library CMake built (ReXGlue's modules and its third-party code)
     mapfile -t game < <(find "$B/CMakeFiles" -path '*/ge.dir/*' -name '*.o')
-    mapfile -t libs < <(find "$B" "$DEPS/rexglue/out/ps5-amd64" -name '*.a')
+    # newest first: the linker takes a symbol from the first archive that has it, so an older copy of a library (left
+    # in the other folder by an earlier build layout) never wins over the one just built
+    mapfile -t libs < <(find "$B" "$DEPS/rexglue/out/ps5-amd64" -name '*.a' -printf '%T@ %p\n' | sort -rn | cut -d' ' -f2-)
     stubs=(); for f in "$SDK"/target/lib/*.so; do case "$f" in *libScePosixForWebKit.so|*libSceGLSlimVSH.so|*libc_stub_weak.so) ;; *) stubs+=("$f") ;; esac; done
     "$SDK/bin/prospero-lld" "${radv_linker_script[@]}" "${flags[@]}" --version-script "$work/exports.map" \
         --exclude-libs=ALL --no-dynamic-linker --gc-sections -e _start -o "$work/llvm-pie.elf" \
@@ -137,6 +139,19 @@ if has link; then
         | sort | uniq -c > "$work/raw_syscalls.txt"
     if [ -s "$work/raw_syscalls.txt" ]; then echo "link: raw syscalls left in:"; cat "$work/raw_syscalls.txt"; exit 1; fi
     echo "link: no raw syscalls"
+    # the PS5's getcontext/swapcontext write Sony's ucontext_t, larger than the SDK's: ReXGlue's fibers must not call
+    # them (patches/rexglue-ps5.patch, core/fiber_posix.cpp)
+    if llvm-nm-18 "$work/llvm-pie.elf" 2>/dev/null | grep -qwE 'getcontext|swapcontext|makecontext'; then
+        echo "link: the program still calls getcontext/swapcontext, which overrun the heap on the PS5"
+        echo "      the SDK source has the PS5 fibers: $(grep -c rex_ps5_fiber_switch "$DEPS/rexglue/src/core/fiber_posix.cpp") lines (0: run ./setup.sh again)"
+        echo "      libraries that define Fiber::ConvertCurrentThread:"
+        for a in "${libs[@]}"; do
+            llvm-nm-18 -A --defined-only "$a" 2>/dev/null | grep -q ConvertCurrentThread &&
+                echo "        $(date -r "$a" '+%F %T') ${a#$ROOT/}"
+        done
+        exit 1
+    fi
+    echo "link: fibers without ucontext"
     # the PS5 packager needs room after the RELRO region: the large code model's sections take it
     large=$(llvm-readelf-18 -S -W "$work/llvm-pie.elf" | grep -c -E ' \.l(text|rodata|data|bss)' || true)
     [ "$large" = 0 ] || { echo "link: $large large-code-model sections (.ltext, .lrodata...) left: something still"

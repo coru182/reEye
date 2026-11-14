@@ -49,3 +49,8 @@ builds for Linux. See `docs/PORTING.md`.
 - `src/ge_hooks.cpp`: GoldenEye-Recomp's Windows-only parts (relaunching itself, the raw-mouse window and cursor
   capture, `GetAsyncKeyState`, the watchdog's `VirtualQuery`) are left out on the PS5: no relaunch, no mouse look and
   no keyboard yet, and the diagnostic stack walk is skipped.
+- `src/ge_hooks.cpp`: the hooks read and write guest memory at `base + address`, which is right on Linux only. The
+  PS5 (like Windows) keeps the 0xE0000000 range 4 KB further on (`PhysicalHostOffset`, as the recompiled code's
+  `REX_PHYS_HOST_OFFSET`), so every access goes through `GH(base, address)`. Without it the GPU-completion hook
+  wrote the ring read pointer, and the watchdog its semaphore release, 4 KB away from the fence block the game and
+  the GPU use (at 0xFFC9B000): the game never saw a frame finish and never showed one.

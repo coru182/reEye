@@ -31,6 +31,11 @@ the game's sources in `patches/goldeneye-ps5.patch`.
   ucontext on the PS5 (tested on Linux, as the PS5 code: 500,000 switches on 9 threads, registers, rounding mode,
   exceptions and unwinding inside fibers). With the guard bytes taking the overrun, the game got as far as loading
   the title screen's textures.
+- With fibers fixed the game runs: sound for a few seconds, ~2000 presents a second, a black screen. GoldenEye-Recomp's
+  watchdog: `submit=8428 completed=0 presented=7`, "GPU BEHIND (completion not delivered)". Its hooks fake the GPU's
+  completion by writing guest memory at `base + address`, without the 0xE0000000 range's 4 KB offset that the PS5
+  build applies (16 KB pages, as on Windows): their writes to the fence block (0xFFC9B000) missed it.
+  `goldeneye-ps5.patch` routes them through the offset.
 - Other structs the system fills may differ from the SDK headers the same way (`stat`, `dirent`, `sigaction`...): the
   heap checks stay on to catch the next one.
 

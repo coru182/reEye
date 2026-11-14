@@ -54,7 +54,107 @@
  }
  }  // namespace ge
  
-@@ -711,6 +737,7 @@
+@@ -91,32 +117,36 @@
+ }  // namespace
+ 
+ namespace {
++// reEye: a guest address as a host pointer, with the 0xE0000000 range's 4 KB offset where the platform has one
++// (the PS5, and Windows: rex::memory::detail::PhysicalHostOffset), as the recompiled code does (REX_PHYS_HOST_OFFSET).
++// Without it these hooks read and wrote 4 KB away from the game and the GPU in that range (the GPU fence block).
++inline uint8_t* GH(uint8_t* b, uint32_t ga) { return b + ga + rex::memory::detail::PhysicalHostOffset(ga); }
+ inline void getcb(PPCContext*& ctx, uint8_t*& base) {
+   ctx = rex::runtime::ThreadState::Get()->context();
+   base = rex::system::kernel_state()->memory()->virtual_membase();
+ }
+ inline uint32_t LD32(uint8_t* b, uint32_t ga) {
+-  uint32_t v; std::memcpy(&v, b + ga, 4); return __builtin_bswap32(v);
++  uint32_t v; std::memcpy(&v, GH(b, ga), 4); return __builtin_bswap32(v);
+ }
+ inline uint64_t LD64(uint8_t* b, uint32_t ga) {
+-  uint64_t v; std::memcpy(&v, b + ga, 8); return __builtin_bswap64(v);
++  uint64_t v; std::memcpy(&v, GH(b, ga), 8); return __builtin_bswap64(v);
+ }
+ inline void ST32(uint8_t* b, uint32_t ga, uint32_t val) {
+-  uint32_t v = __builtin_bswap32(val); std::memcpy(b + ga, &v, 4);
++  uint32_t v = __builtin_bswap32(val); std::memcpy(GH(b, ga), &v, 4);
+ }
+ inline void STF32(uint8_t* b, uint32_t ga, float f) {
+   uint32_t v; std::memcpy(&v, &f, 4); v = __builtin_bswap32(v);
+-  std::memcpy(b + ga, &v, 4);
++  std::memcpy(GH(b, ga), &v, 4);
+ }
+ inline float LDF32(uint8_t* b, uint32_t ga) {
+-  uint32_t v; std::memcpy(&v, b + ga, 4); v = __builtin_bswap32(v);
++  uint32_t v; std::memcpy(&v, GH(b, ga), 4); v = __builtin_bswap32(v);
+   float f; std::memcpy(&f, &v, 4); return f;
+ }
+ inline uint16_t LD16(uint8_t* b, uint32_t ga) {
+-  uint16_t v; std::memcpy(&v, b + ga, 2); return __builtin_bswap16(v);
++  uint16_t v; std::memcpy(&v, GH(b, ga), 2); return __builtin_bswap16(v);
+ }
+ inline void ST16(uint8_t* b, uint32_t ga, uint16_t val) {
+-  uint16_t v = __builtin_bswap16(val); std::memcpy(b + ga, &v, 2);
++  uint16_t v = __builtin_bswap16(val); std::memcpy(GH(b, ga), &v, 2);
+ }
+ }  // namespace
+ 
+@@ -177,7 +207,7 @@
+         uint32_t presented = dev ? LD32(base, dev + 16552) : 0;
+         uint32_t target = dev ? LD32(base, dev + 10908) : 0;
+         uint32_t completed = idblk ? LD32(base, idblk + 0) : 0;
+-        uint32_t skip = dev ? (base[dev + 10941] & 2) : 0;
++        uint32_t skip = dev ? (*GH(base, dev + 10941) & 2) : 0;
+         REXKRNL_INFO(
+             "GEWATCHDOG STALL: ring rpi={:#x} wpi={:#x} [{}] | present#={} (+{}/stall) | "
+             "dbgnow_polls={} (+{}/stall) | submit={} completed={} target={} presented={} skipbit={} "
+@@ -205,8 +235,8 @@
+           uint32_t f22276 = LD32(base, dev + 22276u);
+           uint32_t f21604 = LD32(base, dev + 21604u);
+           uint32_t f21600 = LD32(base, dev + 21600u);
+-          uint32_t b10941 = base[dev + 10941u];
+-          uint32_t b10943 = base[dev + 10943u];
++          uint32_t b10941 = *GH(base, dev + 10941u);
++          uint32_t b10943 = *GH(base, dev + 10943u);
+           REXKRNL_INFO(
+               "GEWATCHDOG -> devflags +21516(VdSwap-skip if !=0)={:#x} | +22280&4(gpu-wait)={} | "
+               "+22276={:#x} | +21604={} +21600={} (ring) | +10941={:#x} +10943={:#x}",
+@@ -257,7 +287,7 @@
+             {
+               uint32_t sp = c->r1.u32;
+               if (sp >= 0x10000u && sp < 0xC0000000u) {
+-                uint8_t* hsp = base + sp;
++                uint8_t* hsp = GH(base, sp);
+                 MEMORY_BASIC_INFORMATION mbi;
+                 if (VirtualQuery(hsp, &mbi, sizeof(mbi)) == sizeof(mbi) &&
+                     mbi.State == MEM_COMMIT &&
+@@ -350,7 +380,7 @@
+                   char fb[620];
+                   int fo = std::snprintf(fb, sizeof(fb), "lr=%x | ", pc);
+                   if (sp >= 0x10000u && sp < 0xC0000000u) {
+-                    uint8_t* hsp = base + sp;
++                    uint8_t* hsp = GH(base, sp);
+                     MEMORY_BASIC_INFORMATION mbi;
+                     if (VirtualQuery(hsp, &mbi, sizeof(mbi)) == sizeof(mbi) &&
+                         mbi.State == MEM_COMMIT) {
+@@ -480,7 +510,7 @@
+     if (!s_waiting) { s_waiting = true; s_wait_start = t; }
+     else if ((uint32_t)(t - s_wait_start) > 4000000u) {  // ~80ms @49.875MHz
+       drawn = true;
+-      if (dev) base[dev + 10941u] |= 0x02u;   // stalled: skip this GPU wait
++      if (dev) *GH(base, dev + 10941u) |= 0x02u;   // stalled: skip this GPU wait
+     }
+     // The six GPU-completion waits poll this routine in a TIGHT busy spin. With
+     // dozens of guest threads that oversubscribes the cores and starves the
+@@ -534,7 +564,7 @@
+   PPCContext* ctx; uint8_t* base; getcb(ctx, base);
+   r11.u32 = r3.u32 ^ 0x2Bu;
+   r28.u32 = 0x82420000u;
+-  base[0x82420239u] = static_cast<uint8_t>(r11.u32 & 0xFFu);
++  *GH(base, 0x82420239u) = static_cast<uint8_t>(r11.u32 & 0xFFu);
+   r28.u32 = 0x82420239u;
+   r11.u32 = 0x82000000u;
+   ge_cont_8209F5F4(*ctx, base);
+@@ -711,6 +741,7 @@
  // act on the game/menu -- the menu only listens for the capture.
  std::atomic<bool> g_rebind_capturing{false};
  
@@ -62,7 +162,7 @@
  // Cursor-capture state (touched from the mouse thread + SetMouselookSuppressed).
  HWND g_game_hwnd = nullptr;
  HCURSOR g_arrow_cursor = nullptr;
-@@ -851,6 +878,16 @@
+@@ -851,6 +882,16 @@
    }
  }
  
@@ -79,3 +179,77 @@
  int ge_take_mouse_dx() { return g_mouse_dx.exchange(0, std::memory_order_relaxed); }
  int ge_take_mouse_dy() { return g_mouse_dy.exchange(0, std::memory_order_relaxed); }
  }  // namespace
+@@ -1199,8 +1240,8 @@
+   // bound doesn't also drive the game, and skip keyboard injection + mouse-look.
+   if (g_rebind_capturing.load(std::memory_order_relaxed)) {
+     ST16(base, GE_PAD0 + 0, 0);   // buttons
+-    base[GE_PAD0 + 2] = 0;        // LT
+-    base[GE_PAD0 + 3] = 0;        // RT
++    *GH(base, GE_PAD0 + 2) = 0;        // LT
++    *GH(base, GE_PAD0 + 3) = 0;        // RT
+     ST16(base, GE_PAD0 + 4, 0);   // LX
+     ST16(base, GE_PAD0 + 6, 0);   // LY
+     ST16(base, GE_PAD0 + 8, 0);   // RX
+@@ -1233,8 +1274,8 @@
+   if (ge_key_down("ge_key_back")) add |= BTN_BACK;
+   if (add) ST16(base, GE_PAD0 + 0, LD16(base, GE_PAD0 + 0) | add);
+ 
+-  if (ge_key_down("ge_key_lt")) base[GE_PAD0 + 2] = 0xFF;
+-  if (ge_key_down("ge_key_rt")) base[GE_PAD0 + 3] = 0xFF;
++  if (ge_key_down("ge_key_lt")) *GH(base, GE_PAD0 + 2) = 0xFF;
++  if (ge_key_down("ge_key_rt")) *GH(base, GE_PAD0 + 3) = 0xFF;
+ 
+   int16_t lx = 0, ly = 0;
+   if (ge_key_down("ge_key_mv_left")) lx = -32767;
+@@ -1316,7 +1357,7 @@
+ // auto-close. Outside a session, keep the loaded value.
+ void ge_ce_mp_door(PPCRegister& r11) {
+   PPCContext* ctx; uint8_t* base; getcb(ctx, base); (void)ctx;
+-  if (base[GE_NET_FLAG] != 0) r11.u32 = 0;
++  if (*GH(base, GE_NET_FLAG) != 0) r11.u32 = 0;
+ }
+ 
+ // disable_player_collisions_for_network_mp @0x820CDFA4 (replaces `bl sub_820B3E90`,
+@@ -1325,7 +1366,7 @@
+ // from the enclosing function in both cases, so return=true.
+ void ge_ce_mp_collision() {
+   PPCContext* ctx; uint8_t* base; getcb(ctx, base);
+-  if (base[GE_NET_FLAG] == 0) sub_820B3E90(*ctx, base);
++  if (*GH(base, GE_NET_FLAG) == 0) sub_820B3E90(*ctx, base);
+ }
+ 
+ // fix_golden_gun_respawn_visiblity_flag @0x820CF940 (replaces cmpwi/bne): keep
+@@ -1359,7 +1400,7 @@
+ void ge_ce_armor_fix(PPCRegister& r30) {
+   PPCContext* ctx; uint8_t* base; getcb(ctx, base); (void)ctx;
+   const uint32_t prop = r30.u32;
+-  if (base[prop + 3] != 0x15) return;  // not an armor prop
++  if (*GH(base, prop + 3) != 0x15) return;  // not an armor prop
+   const float f50 = LDF32(base, 0x82000B90u);
+   const float f1000 = LDF32(base, 0x8200371Cu);
+   float nearest = LDF32(base, 0x82003F0Cu);  // 1,000,000
+@@ -1506,8 +1547,8 @@
+   }
+   if (model != 0) {                                          // remote player damaged
+     ST32(base, 0x824203ACu, 1u);                             // not your death
+-    const uint32_t bodynum = base[model + 0x0Fu];
+-    const uint32_t gender = base[0x82729020u + bodynum * 0x24u + 0x18u];
++    const uint32_t bodynum = *GH(base, model + 0x0Fu);
++    const uint32_t gender = *GH(base, 0x82729020u + bodynum * 0x24u + 0x18u);
+     ctx->r5.u32 = 0;
+     uint32_t arghid;
+     if (gender == 0u) {                                      // female
+@@ -1557,11 +1598,11 @@
+ // byte = settings+0x295, fx vol = settings+0x294. All use jump_address = site+4.
+ void ge_ce_watch_music_read(PPCRegister& r3) {
+   PPCContext* ctx; uint8_t* base; getcb(ctx, base); (void)ctx;
+-  r3.u32 = (uint32_t)(base[r3.u32 + 0x295u] >> 1);
++  r3.u32 = (uint32_t)(*GH(base, r3.u32 + 0x295u) >> 1);
+ }
+ void ge_ce_watch_sfx_read(PPCRegister& r3) {
+   PPCContext* ctx; uint8_t* base; getcb(ctx, base); (void)ctx;
+-  r3.u32 = (uint32_t)(base[r3.u32 + 0x294u] >> 1);
++  r3.u32 = (uint32_t)(*GH(base, r3.u32 + 0x294u) >> 1);
+ }
+ void ge_ce_watch_music_save() {
+   PPCContext* ctx; uint8_t* base; getcb(ctx, base);
